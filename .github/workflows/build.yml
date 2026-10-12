@@ -1,0 +1,22 @@
+name: build
+on:
+  push:
+  pull_request:
+
+jobs:
+  macos-arm64:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --target VassaGruuv_VST3 VassaGruuvTests -j 4
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Verify arm64
+        run: lipo -archs "build/VassaGruuv_artefacts/Release/VST3/Vassa Gruuv.vst3/Contents/MacOS/Vassa Gruuv"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VassaGruuv-vst3-macos-arm64
+          path: build/VassaGruuv_artefacts/Release/VST3/Vassa Gruuv.vst3
