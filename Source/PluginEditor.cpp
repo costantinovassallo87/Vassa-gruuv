@@ -21,9 +21,7 @@ const KnobLabel knobLabels[] = {
     { vg::TPStart, "Start" }, { vg::TPEnd, "End" }, { vg::TPLoopStart, "Loop St" }, { vg::TPLoopEnd, "Loop End" },
     { vg::TPLoopFade, "Loop Fade" }, { vg::TPFadeIn, "Fade In" }, { vg::TPFadeOut, "Fade Out" }, { vg::TPSCount, "Slices" },
     { vg::TPSSens, "Sens" }, { vg::TPTranspose, "Transp" }, { vg::TPDetune, "Detune" }, { vg::TPGain, "Gain" },
-    { vg::TPPan, "Pan" }, { vg::TPAmpA, "A" }, { vg::TPAmpD, "D" }, { vg::TPAmpS, "S" }, { vg::TPAmpR, "R" },
-    { vg::TPFCut, "Cutoff" }, { vg::TPFRes, "Res" }, { vg::TPFEnv, "Env Amt" }, { vg::TPFA, "A" }, { vg::TPFD, "D" },
-    { vg::TPFS, "S" }, { vg::TPFR, "R" }, { vg::TPLRate, "Rate" }, { vg::TPLAmt, "Amount" },
+    { vg::TPPan, "Pan" }, { vg::TPFCut, "Cutoff" }, { vg::TPFRes, "Res" }, { vg::TPLRate, "Rate" }, { vg::TPLAmt, "Amount" },
 };
 } // namespace
 
@@ -138,7 +136,7 @@ void Knob::init (juce::Component& parent, const juce::String& text)
     slider.sendLookAndFeelChange();
     label.setText (text, juce::dontSendNotification);
     label.setJustificationType (juce::Justification::centred);
-    label.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+    label.setFont (juce::FontOptions (9.5f, juce::Font::bold));
     label.setColour (juce::Label::textColourId, col::text.withAlpha (0.75f));
     label.setInterceptsMouseClicks (false, false);
 }
@@ -153,6 +151,7 @@ void Knob::setBounds (int x, int y, int w, int h)
 {
     label.setBounds (x, y, w, 12);
     slider.setBounds (x, y + 12, w, h - 12);
+    slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, w, 12);
 }
 
 void DragHandle::paint (juce::Graphics& g)
@@ -721,13 +720,305 @@ void WaveformView::filesDropped (const juce::StringArray& files, int, int)
         onSampleChanged();
 }
 
+// ------------------------------------------------------------ EnvelopeView
+
+juce::Colour EnvelopeView::colour() const
+{
+    return kind == vg::EnvAmp ? col::accent : (kind == vg::EnvPitch ? col::purple : col::accent2);
+}
+
+float EnvelopeView::ty (float level) const
+{
+    const auto& info = vg::envInfo (kind);
+    const auto r = plot();
+    return r.getBottom() - (level - info.min) / (info.max - info.min) * r.getHeight();
+}
+
+float EnvelopeView::levelAt (float y) const
+{
+    const auto& info = vg::envInfo (kind);
+    const auto r = plot();
+    float v = info.min + (r.getBottom() - y) / r.getHeight() * (info.max - info.min);
+    v = juce::jlimit (info.min, info.max, v);
+    const float range = info.max - info.min, snapTol = range * 0.025f;
+    for (float target : { info.min, info.max, 0.0f, 1.0f })
+        if (target >= info.min && target <= info.max && std::abs (v - target) < snapTol)
+            return target;
+    return info.bipolar ? std::round (v) : v;
+}
+
+int EnvelopeView::pointAt (juce::Point<float> p) const
+{
+    const auto e = dragging >= 0 ? edit : proc.getEnv (track, kind);
+    int best = -1;
+    float bestD = 10.0f;
+    for (int i = 0; i < e.n; ++i)
+    {
+        const float d = p.getDistanceFrom ({ tx (e.p[i].timeMs), ty (e.p[i].level) });
+        if (d < bestD)
+        {
+            bestD = d;
+            best = i;
+        }
+    }
+    return best;
+}
+
+void EnvelopeView::commit()
+{
+    proc.setEnv (track, kind, edit);
+    edit = proc.getEnv (track, kind);
+}
+
+void EnvelopeView::resetShape()
+{
+    proc.setEnv (track, kind, vg::defaultEnv (kind));
+    lastTrack = -1; // refit the time axis
+    repaint();
+}
+
+void EnvelopeView::addPoint (juce::Point<float> pos)
+{
+    edit = proc.getEnv (track, kind);
+    if (edit.n >= vg::maxEnvPoints)
+        return;
+
+    const float t = juce::jmax (1.0f, msAt (pos.x));
+    int at = edit.n;
+    for (int i = 1; i < edit.n; ++i)
+        if (edit.p[i].timeMs > t) { at = i; break; }
+    for (int i = edit.n; i > at; --i)
+        edit.p[i] = edit.p[i - 1];
+    edit.p[at] = { t, levelAt (pos.y) };
+    ++edit.n;
+    if (at <= edit.sustain && edit.sustain < edit.n - 1)
+        ++edit.sustain;
+    commit();
+}
+
+void EnvelopeView::removePoint (int index)
+{
+    edit = proc.getEnv (track, kind);
+    if (index <= 0 || edit.n <= 1)
+        return;
+    for (int i = index; i < edit.n - 1; ++i)
+        edit.p[i] = edit.p[i + 1];
+    --edit.n;
+    if (index < edit.sustain || edit.sustain >= edit.n)
+        edit.sustain = juce::jmax (0, edit.sustain - 1);
+    commit();
+}
+
+void EnvelopeView::paint (juce::Graphics& g)
+{
+    if (track != lastTrack || kind != lastKind)
+    {
+        lastTrack = track;
+        lastKind = kind;
+        const auto e0 = proc.getEnv (track, kind);
+        spanMs = juce::jmax (200.0f, e0.p[e0.n - 1].timeMs * 1.5f);
+    }
+
+    const auto e = dragging >= 0 ? edit : proc.getEnv (track, kind);
+    const auto& info = vg::envInfo (kind);
+    const auto r = plot();
+    const auto c = colour();
+
+    g.setColour (col::bg);
+    g.fillRoundedRectangle (getLocalBounds().toFloat(), 6.0f);
+    g.setColour (col::border);
+    g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 6.0f, 1.0f);
+
+    // Grid + axes
+    g.setFont (juce::FontOptions (9.0f));
+    const float levels[] = { info.min, info.bipolar ? 0.0f : (info.min + info.max) * 0.5f, info.max };
+    for (float lv : levels)
+    {
+        g.setColour (col::dim.withAlpha (info.bipolar && std::abs (lv) < 0.001f ? 0.45f : 0.16f));
+        g.drawHorizontalLine ((int) ty (lv), r.getX(), r.getRight());
+        g.setColour (col::dim);
+        g.drawText (juce::String (lv, info.bipolar ? 0 : 1), 0, (int) ty (lv) - 6, 31, 12, juce::Justification::centredRight);
+    }
+    {
+        static const float steps[] = { 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000 };
+        float tick = steps[10];
+        for (float st : steps)
+            if (st / spanMs * r.getWidth() >= 46.0f) { tick = st; break; }
+        for (float t = 0.0f; t <= spanMs; t += tick)
+        {
+            g.setColour (col::dim.withAlpha (0.16f));
+            g.drawVerticalLine ((int) tx (t), r.getY(), r.getBottom());
+            g.setColour (col::dim);
+            if (tx (t) + 20.0f <= (float) getWidth())
+                g.drawText (t >= 1000.0f ? juce::String (t / 1000.0f, 1) + " s" : juce::String ((int) t) + " ms", (int) tx (t) - 20, (int) r.getBottom() + 3, 40, 12,
+                            juce::Justification::centred);
+        }
+    }
+
+    // Curve
+    juce::Path line;
+    for (int i = 0; i < e.n; ++i)
+    {
+        const juce::Point<float> p (tx (e.p[i].timeMs), ty (e.p[i].level));
+        i == 0 ? line.startNewSubPath (p) : line.lineTo (p);
+    }
+    const juce::Point<float> endPt (tx (e.p[e.n - 1].timeMs), ty (e.p[e.n - 1].level));
+
+    juce::Path fill (line);
+    fill.lineTo (r.getRight(), endPt.y);
+    const float base = info.bipolar ? ty (0.0f) : r.getBottom();
+    fill.lineTo (r.getRight(), base);
+    fill.lineTo (tx (0.0f), base);
+    fill.closeSubPath();
+    g.setColour (c.withAlpha (0.16f));
+    g.fillPath (fill);
+
+    const float dashes[] = { 3.0f, 3.0f };
+    g.setColour (c.withAlpha (0.55f));
+    g.drawDashedLine ({ endPt, { r.getRight(), endPt.y } }, dashes, 2, 1.2f);
+    g.setColour (c);
+    g.strokePath (line, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved));
+
+    // Sustain marker
+    {
+        const float sx = tx (e.p[e.sustain].timeMs);
+        g.setColour (juce::Colours::white.withAlpha (0.35f));
+        g.drawDashedLine ({ { sx, r.getY() }, { sx, r.getBottom() } }, dashes, 2, 1.0f);
+        g.setFont (juce::FontOptions (8.5f, juce::Font::bold));
+        g.setColour (juce::Colours::white.withAlpha (0.7f));
+        g.drawText ("SUS", (int) sx + 3, (int) r.getY(), 26, 10, juce::Justification::left);
+    }
+
+    // Points
+    for (int i = 0; i < e.n; ++i)
+    {
+        const juce::Point<float> p (tx (e.p[i].timeMs), ty (e.p[i].level));
+        const bool hot = i == hover || i == dragging;
+        const float rad = hot ? 6.5f : 5.0f;
+        g.setColour (col::bg);
+        g.fillEllipse (p.x - rad - 1.5f, p.y - rad - 1.5f, (rad + 1.5f) * 2.0f, (rad + 1.5f) * 2.0f);
+        g.setColour (i == e.sustain ? juce::Colours::white : c);
+        g.fillEllipse (p.x - rad, p.y - rad, rad * 2.0f, rad * 2.0f);
+        if (i == e.sustain)
+        {
+            g.setColour (c);
+            g.drawEllipse (p.x - rad, p.y - rad, rad * 2.0f, rad * 2.0f, 2.0f);
+        }
+    }
+
+    // Readout
+    if (hover >= 0 || dragging >= 0)
+    {
+        const int i = dragging >= 0 ? dragging : hover;
+        const auto text = juce::String (e.p[i].timeMs, 0) + " ms   " + (kind == vg::EnvAmp ? juce::String (e.p[i].level, 2) : juce::String (e.p[i].level, 1) + info.unit);
+        g.setColour (juce::Colours::black.withAlpha (0.75f));
+        g.fillRoundedRectangle (r.getRight() - 112.0f, r.getY() + 2.0f, 110.0f, 15.0f, 3.0f);
+        g.setColour (col::text);
+        g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+        g.drawText (text, (int) r.getRight() - 112, (int) r.getY() + 2, 110, 15, juce::Justification::centred);
+    }
+}
+
+void EnvelopeView::mouseMove (const juce::MouseEvent& e)
+{
+    const int h = pointAt (e.position);
+    if (h != hover)
+    {
+        hover = h;
+        repaint();
+    }
+    setMouseCursor (h >= 0 ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor);
+}
+
+void EnvelopeView::mouseDown (const juce::MouseEvent& e)
+{
+    const int i = pointAt (e.position);
+
+    if (e.mods.isPopupMenu())
+    {
+        juce::PopupMenu m;
+        if (i >= 0)
+        {
+            m.addItem (1, "Set as sustain point");
+            m.addItem (2, "Delete point", i > 0 && proc.getEnv (track, kind).n > 1);
+        }
+        else
+            m.addItem (3, "Add point here");
+        m.addItem (4, "Reset envelope");
+
+        juce::Component::SafePointer<EnvelopeView> safe (this);
+        const auto pos = e.position;
+        m.showMenuAsync (juce::PopupMenu::Options(), [safe, i, pos] (int r)
+                         {
+                             if (safe == nullptr || r == 0)
+                                 return;
+                             if (r == 1)
+                             {
+                                 safe->edit = safe->proc.getEnv (safe->track, safe->kind);
+                                 safe->edit.sustain = i;
+                                 safe->commit();
+                             }
+                             else if (r == 2) safe->removePoint (i);
+                             else if (r == 3) safe->addPoint (pos);
+                             else if (r == 4) safe->resetShape();
+                             safe->repaint();
+                         });
+        return;
+    }
+
+    if (i >= 0)
+    {
+        edit = proc.getEnv (track, kind);
+        dragging = i;
+    }
+}
+
+void EnvelopeView::mouseDrag (const juce::MouseEvent& e)
+{
+    if (dragging < 0)
+        return;
+
+    auto& pt = edit.p[dragging];
+    pt.level = levelAt (e.position.y);
+    if (dragging > 0)
+    {
+        const float lo = edit.p[dragging - 1].timeMs + 1.0f;
+        const float hi = dragging < edit.n - 1 ? edit.p[dragging + 1].timeMs - 1.0f : 60000.0f;
+        pt.timeMs = juce::jlimit (lo, juce::jmax (lo, hi), std::round (msAt (e.position.x)));
+        if (dragging == edit.n - 1 && pt.timeMs > spanMs * 0.97f)
+            spanMs = pt.timeMs / 0.9f; // keep the last point reachable
+    }
+    proc.setEnv (track, kind, edit);
+    repaint();
+}
+
+void EnvelopeView::mouseUp (const juce::MouseEvent&)
+{
+    dragging = -1;
+    repaint();
+}
+
+void EnvelopeView::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    if (pointAt (e.position) < 0 && plot().contains (e.position))
+        addPoint (e.position);
+    repaint();
+}
+
+void EnvelopeView::mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w)
+{
+    spanMs = juce::jlimit (40.0f, 20000.0f, spanMs * (w.deltaY > 0 ? 0.8f : 1.25f));
+    repaint();
+}
+
 // ------------------------------------------------------------ Editor
 
 MainPanel::MainPanel (VassaGruuvProcessor& p)
     : proc (p),
       stepGrid (p, [this] (int t) { selectTrack (t); }),
       modGrid (p),
-      waveform (p)
+      waveform (p),
+      envView (p)
 {
     setLookAndFeel (&laf);
 
@@ -805,6 +1096,26 @@ MainPanel::MainPanel (VassaGruuvProcessor& p)
     for (const auto& kl : knobLabels)
         knobs[kl.tp].init (*this, kl.text);
 
+    // Envelope view with a selector: only one envelope is shown at a time
+    addAndMakeVisible (envView);
+    for (int k = 0; k < vg::numEnvKinds; ++k)
+    {
+        auto& b = envTabs[(size_t) k];
+        b.setButtonText (juce::String (vg::envInfo (k).name).toUpperCase());
+        b.setClickingTogglesState (true);
+        b.setRadioGroupId (1002);
+        b.setColour (juce::TextButton::buttonOnColourId, k == vg::EnvAmp ? col::accent : (k == vg::EnvPitch ? col::purple : col::accent2));
+        b.onClick = [this, k]
+        {
+            envView.kind = k;
+            envView.repaint();
+        };
+        addAndMakeVisible (b);
+    }
+    envTabs[0].setToggleState (true, juce::dontSendNotification);
+    addAndMakeVisible (envReset);
+    envReset.onClick = [this] { envView.resetShape(); };
+
     for (auto* box : { &fTypeBox, &lDestBox, &sModeBox })
         addAndMakeVisible (box);
     fTypeBox.addItemList (juce::StringArray::fromTokens (vg::tpSpec (vg::TPFType).choices, "|", ""), 1);
@@ -817,11 +1128,11 @@ MainPanel::MainPanel (VassaGruuvProcessor& p)
         for (int tp : tps)
             knobs[tp].slider.getProperties().set ("col", (int) c.getARGB());
     };
-    tint ({ vg::TPTranspose, vg::TPDetune, vg::TPGain, vg::TPPan, vg::TPAmpA, vg::TPAmpD, vg::TPAmpS, vg::TPAmpR }, col::accent);
-    tint ({ vg::TPFCut, vg::TPFRes, vg::TPFEnv, vg::TPFA, vg::TPFD, vg::TPFS, vg::TPFR }, col::accent2);
+    tint ({ vg::TPTranspose, vg::TPDetune, vg::TPGain, vg::TPPan }, col::accent);
+    tint ({ vg::TPFCut, vg::TPFRes }, col::accent2);
     tint ({ vg::TPLRate, vg::TPLAmt }, col::purple);
     tint ({ vg::TPStart, vg::TPEnd, vg::TPLoopStart, vg::TPLoopEnd, vg::TPLoopFade, vg::TPFadeIn, vg::TPFadeOut, vg::TPSCount, vg::TPSSens }, col::green);
-    for (int tp : { vg::TPPan, vg::TPDetune, vg::TPTranspose, vg::TPFEnv })
+    for (int tp : { vg::TPPan, vg::TPDetune, vg::TPTranspose })
         knobs[tp].slider.getProperties().set ("bipolar", true);
     playButton.getProperties().set ("col", (int) col::green.getARGB());
     loopToggle.getProperties().set ("col", (int) col::accent2.getARGB());
@@ -865,11 +1176,14 @@ void MainPanel::paint (juce::Graphics& g)
 
     g.setColour (col::dim);
     g.setFont (juce::FontOptions (10.0f));
+    g.drawText ("dbl-click: add point  |  right-click: sustain / delete  |  wheel: zoom", 720, 540, 266, 12, juce::Justification::centredRight);
     g.drawText ("drag = paint  |  double-click / Alt = reset  |  wheel = fine", 740, 372, 244, 22, juce::Justification::centredRight);
 
-    static const char* groupTitles[] = { "OUTPUT", "AMP ENVELOPE", "LFO", "FILTER", "FILTER ENVELOPE", "SAMPLE", "TRACK" };
+    static const char* groupTitles[] = { "OUTPUT", "ENVELOPE", "LFO", "FILTER", "", "SAMPLE", "TRACK" };
     for (int i = 0; i < 7; ++i)
     {
+        if (groupRects[i].isEmpty())
+            continue;
         g.setColour (col::bg.withAlpha (0.5f));
         g.fillRoundedRectangle (groupRects[i].toFloat(), 6.0f);
         g.setColour (col::border.withAlpha (0.7f));
@@ -881,16 +1195,16 @@ void MainPanel::paint (juce::Graphics& g)
 
     // Track info
     {
-        const auto r = groupRects[6].reduced (10, 0).withTrimmedTop (20);
-        g.setFont (juce::FontOptions (11.0f));
+        const auto r = groupRects[6].reduced (8, 0).withTrimmedTop (18);
+        g.setFont (juce::FontOptions (10.5f));
         g.setColour (col::track (selectedTrack));
-        g.fillRoundedRectangle ((float) r.getX(), (float) r.getY() + 3.0f, 4.0f, 52.0f, 2.0f);
+        g.fillRoundedRectangle ((float) r.getX(), (float) r.getY() + 3.0f, 3.0f, 44.0f, 1.5f);
         g.setColour (col::text);
-        g.drawText ("Output:  Track " + juce::String (selectedTrack + 1) + " bus", r.getX() + 12, r.getY(), r.getWidth() - 12, 18, juce::Justification::centredLeft);
-        g.drawText ("MIDI note:  " + juce::MidiMessage::getMidiNoteName (36 + selectedTrack, true, true, 3) + "  (" + juce::String (36 + selectedTrack) + ")",
-                    r.getX() + 12, r.getY() + 18, r.getWidth() - 12, 18, juce::Justification::centredLeft);
+        g.drawText ("Out: Track " + juce::String (selectedTrack + 1), r.getX() + 9, r.getY(), r.getWidth() - 9, 16, juce::Justification::centredLeft);
+        g.drawText ("MIDI: " + juce::MidiMessage::getMidiNoteName (36 + selectedTrack, true, true, 3) + " (" + juce::String (36 + selectedTrack) + ")",
+                    r.getX() + 9, r.getY() + 15, r.getWidth() - 9, 16, juce::Justification::centredLeft);
         g.setColour (col::dim);
-        g.drawText ("Not routed -> Main Mix", r.getX() + 12, r.getY() + 36, r.getWidth() - 12, 18, juce::Justification::centredLeft);
+        g.drawText ("else -> Main Mix", r.getX() + 9, r.getY() + 30, r.getWidth() - 9, 16, juce::Justification::centredLeft);
     }
 }
 
@@ -932,38 +1246,37 @@ void MainPanel::resized()
     factoryButton.setBounds (832, 510, 58, 22);
     previewButton.setBounds (894, 510, 90, 22);
 
-    waveform.setBounds (16, 538, 500, 196);
+    waveform.setBounds (16, 538, 620, 232);
 
-    const int kw = 56, kh = 80;
-    groupRects[0] = { 528, 538, 226, 100 };  // output
-    groupRects[1] = { 528, 642, 226, 100 };  // amp env
-    groupRects[2] = { 528, 746, 226, 100 };  // lfo
-    groupRects[3] = { 762, 538, 230, 100 };  // filter
-    groupRects[4] = { 762, 642, 230, 100 };  // filter env
-    groupRects[6] = { 762, 746, 230, 100 };  // track info
-    groupRects[5] = { 16, 742, 500, 104 };   // sample
+    groupRects[5] = { 16, 774, 620, 72 };    // sample
+    groupRects[1] = { 648, 538, 344, 154 };  // envelope
+    groupRects[0] = { 648, 696, 172, 72 };   // output
+    groupRects[3] = { 824, 696, 168, 72 };   // filter
+    groupRects[2] = { 648, 772, 172, 72 };   // lfo
+    groupRects[6] = { 824, 772, 168, 72 };   // track info
+    groupRects[4] = {};
 
-    auto row = [&] (const juce::Rectangle<int>& r, std::initializer_list<int> tps)
+    // Envelope selector + editor
+    for (int k = 0; k < vg::numEnvKinds; ++k)
+        envTabs[(size_t) k].setBounds (654 + k * 62, 556, 60, 20);
+    envReset.setBounds (932, 556, 54, 20);
+    envView.setBounds (654, 580, 332, 108);
+
+    const int kh = 56;
+    int xx = groupRects[0].getX() + 2;
+    for (int tp : { vg::TPTranspose, vg::TPDetune, vg::TPGain, vg::TPPan })
     {
-        int xx = r.getX() + 1;
-        for (int tp : tps)
-        {
-            knobs[tp].setBounds (xx, r.getY() + 16, kw, kh);
-            xx += kw;
-        }
-    };
-    row (groupRects[0], { vg::TPTranspose, vg::TPDetune, vg::TPGain, vg::TPPan });
-    row (groupRects[1], { vg::TPAmpA, vg::TPAmpD, vg::TPAmpS, vg::TPAmpR });
-    row (groupRects[4], { vg::TPFA, vg::TPFD, vg::TPFS, vg::TPFR });
+        knobs[tp].setBounds (xx, groupRects[0].getY() + 15, 42, kh);
+        xx += 42;
+    }
 
-    lDestBox.setBounds (groupRects[2].getX() + 8, groupRects[2].getY() + 44, 78, 24);
-    knobs[vg::TPLRate].setBounds (groupRects[2].getX() + 96, groupRects[2].getY() + 16, kw, kh);
-    knobs[vg::TPLAmt].setBounds (groupRects[2].getX() + 96 + kw + 4, groupRects[2].getY() + 16, kw, kh);
+    fTypeBox.setBounds (groupRects[3].getX() + 4, groupRects[3].getY() + 32, 58, 22);
+    knobs[vg::TPFCut].setBounds (groupRects[3].getX() + 64, groupRects[3].getY() + 15, 54, kh);
+    knobs[vg::TPFRes].setBounds (groupRects[3].getX() + 118, groupRects[3].getY() + 15, 48, kh);
 
-    fTypeBox.setBounds (groupRects[3].getX() + 8, groupRects[3].getY() + 44, 62, 24);
-    knobs[vg::TPFCut].setBounds (groupRects[3].getX() + 76, groupRects[3].getY() + 16, 52, kh);
-    knobs[vg::TPFRes].setBounds (groupRects[3].getX() + 76 + 52, groupRects[3].getY() + 16, 52, kh);
-    knobs[vg::TPFEnv].setBounds (groupRects[3].getX() + 76 + 104, groupRects[3].getY() + 16, 52, kh);
+    lDestBox.setBounds (groupRects[2].getX() + 4, groupRects[2].getY() + 32, 58, 22);
+    knobs[vg::TPLRate].setBounds (groupRects[2].getX() + 64, groupRects[2].getY() + 15, 54, kh);
+    knobs[vg::TPLAmt].setBounds (groupRects[2].getX() + 118, groupRects[2].getY() + 15, 52, kh);
 
     layoutSamplerControls();
 }
@@ -990,20 +1303,20 @@ void MainPanel::layoutSamplerControls()
     order.insert (order.end(), { vg::TPFadeIn, vg::TPFadeOut });
 
     int x = groupRects[5].getX() + 4;
-    const int y = groupRects[5].getY() + 16;
+    const int y = groupRects[5].getY() + 15;
     for (int tp : order)
     {
         if (tp < 0)
         {
-            sModeBox.setBounds (x + 2, y + 28, 68, 24);
+            sModeBox.setBounds (x + 2, y + 24, 66, 22);
             sModeBox.setVisible (true);
-            x += 72;
+            x += 70;
         }
         else
         {
-            knobs[tp].setBounds (x, y, 62, 80);
+            knobs[tp].setBounds (x, y, 56, 56);
             knobs[tp].setVisible (true);
-            x += 62;
+            x += 58;
         }
     }
 }
@@ -1025,6 +1338,7 @@ void MainPanel::selectTrack (int track)
     stepGrid.selected = track;
     modGrid.track = track;
     waveform.track = track;
+    envView.track = track;
 
     for (const auto& kl : knobLabels)
         knobs[kl.tp].attach (proc.apvts, vg::trackParamId (track, kl.tp));
@@ -1118,6 +1432,7 @@ void MainPanel::timerCallback()
     stepGrid.repaint();
     modGrid.repaint();
     waveform.repaint();
+    envView.repaint();
 
     const auto prm = proc.readTrackParams (selectedTrack);
     const int mode = prm.idx (vg::TPMode);

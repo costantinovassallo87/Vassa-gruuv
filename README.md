@@ -8,7 +8,8 @@ Groove box VST3 per Mac Apple Silicon, ispirata a NI Maschine ma semplificata. C
 3. **Sampler** (stile Ableton Simpler) – segue la traccia selezionata:
    - modi **Classic** (ADSR + loop con crossfade), **One-Shot**, **Slice** (divisioni uguali o rilevamento transienti con sensibilità)
    - waveform con marker trascinabili (start/end/loop), fade in/out, reverse, drag & drop di file audio
-   - transpose, detune, gain, pan; ampiezza ADSR; filtro LP/HP/BP con envelope; LFO (pitch/filter/volume/pan)
+   - transpose, detune, gain, pan; filtro LP/HP/BP; LFO (pitch/filter/volume/pan)
+   - **inviluppi a linea** (stile Cubase Sampler Track) per Amp, Pitch e Filter, con selettore per mostrarne uno alla volta: fino a 8 punti trascinabili, doppio click = aggiungi, click destro = punto di sustain / elimina, rotella = zoom temporale. Il sustain tiene l'inviluppo finché la nota è tenuta; al rilascio prosegue sui punti successivi (in One-Shot/Slice resta sul sustain fino a fine sample)
    - waveform con zoom (rotella; Shift+rotella = scorri; doppio click = reset), righello temporale, marker S/E/L con lettura in ms durante il drag
    - ogni traccia parte con un suono di fabbrica sintetizzato (pulsante *Factory* per ripristinarlo)
 

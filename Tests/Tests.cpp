@@ -191,7 +191,10 @@ struct VassaTests : public juce::UnitTest
             expect (! renderVoice (p, sine, 60000).stillActive, "one-shot ended after sample");
 
             p.v[TPMode] = ModeClassic;
-            p.v[TPAmpR] = 20.0f;
+            p.env[EnvAmp] = EnvShape();
+            p.env[EnvAmp].n = 2;
+            p.env[EnvAmp].p[0] = { 0.0f, 1.0f };
+            p.env[EnvAmp].p[1] = { 20.0f, 0.0f };
             auto gated = renderVoice (p, sine, 30000, 4410); // gate 0.1 s
             expect (! gated.stillActive, "classic released after gate");
             expect (peakRange (gated.l, 10000, 30000) < 0.01f, "silent after the release");
@@ -234,6 +237,82 @@ struct VassaTests : public juce::UnitTest
             auto clean = renderVoice (p, sine, 8000);
             expect (dark.peak < clean.peak * 0.5f, "lowpass at 100 Hz attenuates a 220 Hz sine");
             expect (dark.finite);
+        }
+
+        beginTest ("Line envelopes: shape, sustain/release, serialisation");
+        {
+            EnvShape e;
+            e.n = 3;
+            e.sustain = 1;
+            e.p[0] = { 0.0f, 0.0f };
+            e.p[1] = { 10.0f, 1.0f };
+            e.p[2] = { 30.0f, 0.0f };
+
+            LineEnv env;
+            env.start (e, 1000.0); // 1 sample = 1 ms
+            float v = 0;
+            for (int i = 0; i < 10; ++i) v = env.tick();
+            expect (std::abs (v - 1.0f) < 0.01f, "attack reaches the sustain point");
+            for (int i = 0; i < 50; ++i) v = env.tick();
+            expect (std::abs (v - 1.0f) < 0.01f, "holds while the note is held");
+            env.release();
+            for (int i = 0; i < 40; ++i) v = env.tick();
+            expect (v < 0.01f && env.finished, "release plays the remaining points");
+
+            env.start (e, 1000.0);
+            for (int i = 0; i < 4; ++i) env.tick();
+            env.release(); // released before reaching the sustain point
+            for (int i = 0; i < 40; ++i) v = env.tick();
+            expect (v < 0.01f, "early release still decays");
+
+            auto round = EnvShape::fromString (e.toString(), EnvAmp);
+            expectEquals (round.n, 3);
+            expectEquals (round.sustain, 1);
+            expect (std::abs (round.p[2].timeMs - 30.0f) < 1.0e-3f);
+
+            EnvShape bad;
+            bad.n = 3;
+            bad.p[0] = { 50.0f, 9.0f };
+            bad.p[1] = { 10.0f, -3.0f };
+            bad.p[2] = { 5.0f, 0.5f };
+            bad.sanitize (EnvAmp);
+            expect (bad.p[0].timeMs == 0.0f && bad.p[1].timeMs > bad.p[0].timeMs && bad.p[2].timeMs > bad.p[1].timeMs);
+            expect (bad.p[0].level <= 1.0f && bad.p[1].level >= 0.0f);
+        }
+
+        beginTest ("Amp / pitch / filter envelopes affect the voice");
+        {
+            auto sine = makeSine();
+            TrackParams p;
+            p.v[TPMode] = ModeClassic;
+            p.env[EnvAmp].n = 2;
+            p.env[EnvAmp].p[0] = { 0.0f, 1.0f };
+            p.env[EnvAmp].p[1] = { 200.0f, 0.0f };
+            p.env[EnvAmp].sustain = 0;
+            auto fadeOut = renderVoice (p, sine, 22050, 3000); // released after ~68 ms, tail 200 ms
+            expect (peakRange (fadeOut.l, 0, 2000) > 0.3f);
+            expect (peakRange (fadeOut.l, 14000, 22050) < 0.01f, "amp envelope tail silences the voice after the gate");
+
+            // Pitch envelope: +12 st at the start makes the sample end sooner than flat
+            p = TrackParams();
+            p.v[TPMode] = ModeOneShot;
+            p.env[EnvPitch].n = 2;
+            p.env[EnvPitch].p[0] = { 0.0f, 24.0f };
+            p.env[EnvPitch].p[1] = { 100.0f, 0.0f };
+            p.env[EnvPitch].sustain = 1;
+            auto sweep = renderVoice (p, sine, 44100 + 4000);
+            expect (! sweep.stillActive && sweep.finite);
+
+            // Filter envelope: closed filter opened by the envelope is louder than closed without it
+            p = TrackParams();
+            p.v[TPMode] = ModeOneShot;
+            p.v[TPFType] = 1.0f;
+            p.v[TPFCut] = 50.0f;
+            auto closed = renderVoice (p, sine, 6000);
+            p.env[EnvFilter].n = 1;
+            p.env[EnvFilter].p[0] = { 0.0f, 48.0f };
+            auto opened = renderVoice (p, sine, 6000);
+            expect (opened.peak > closed.peak * 3.0f, "filter envelope opens the cutoff");
         }
 
         beginTest ("Slice mode picks the right region");

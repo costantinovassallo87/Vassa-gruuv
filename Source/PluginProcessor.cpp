@@ -78,6 +78,11 @@ VassaGruuvProcessor::VassaGruuvProcessor()
     pReverb = apvts.getRawParameterValue ("reverb");
     pRun    = apvts.getRawParameterValue ("run");
 
+    for (auto& te : envs)
+        for (int k = 0; k < numEnvKinds; ++k)
+            te[(size_t) k] = defaultEnv (k);
+    envsAudio = envs;
+
     formatManager.registerBasicFormats();
     for (int t = 0; t < numTracks; ++t)
         resetToFactorySample (t);
@@ -130,12 +135,41 @@ void VassaGruuvProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     internalPpq = 0.0;
 }
 
-TrackParams VassaGruuvProcessor::readTrackParams (int track) const
+TrackParams VassaGruuvProcessor::readTrackParams (int track, bool fromAudioThread) const
 {
     TrackParams p;
     for (int i = 0; i < numTP; ++i)
         p.v[i] = tpPtr[(size_t) track][(size_t) i]->load (std::memory_order_relaxed);
+
+    if (fromAudioThread)
+    {
+        for (int k = 0; k < numEnvKinds; ++k)
+            p.env[k] = envsAudio[(size_t) track][(size_t) k];
+    }
+    else
+    {
+        const juce::SpinLock::ScopedLockType l (envLock);
+        for (int k = 0; k < numEnvKinds; ++k)
+            p.env[k] = envs[(size_t) track][(size_t) k];
+    }
     return p;
+}
+
+EnvShape VassaGruuvProcessor::getEnv (int track, int kind) const
+{
+    const juce::SpinLock::ScopedLockType l (envLock);
+    return envs[(size_t) track][(size_t) kind];
+}
+
+void VassaGruuvProcessor::setEnv (int track, int kind, const EnvShape& shape)
+{
+    auto e = shape;
+    e.sanitize (kind);
+    {
+        const juce::SpinLock::ScopedLockType l (envLock);
+        envs[(size_t) track][(size_t) kind] = e;
+    }
+    envVersion.fetch_add (1);
 }
 
 void VassaGruuvProcessor::startTrig (const Trig& e, bool anySolo)
@@ -159,7 +193,7 @@ void VassaGruuvProcessor::startTrig (const Trig& e, bool anySolo)
     if (smp == nullptr)
         return;
 
-    samplers[t].noteOn (readTrackParams (e.track), std::move (smp), e.vel, e.pitch, e.slice, e.gate, sr);
+    samplers[t].noteOn (readTrackParams (e.track, true), std::move (smp), e.vel, e.pitch, e.slice, e.gate, sr);
 }
 
 void VassaGruuvProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -183,6 +217,16 @@ void VassaGruuvProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
             auto bb = getBusBuffer (buffer, false, t + 1);
             dstL[(size_t) t] = bb.getWritePointer (0);
             dstR[(size_t) t] = bb.getWritePointer (1);
+        }
+    }
+
+    if (const int v = envVersion.load(); v != envVersionAudio)
+    {
+        const juce::SpinLock::ScopedTryLockType l (envLock);
+        if (l.isLocked())
+        {
+            envsAudio = envs;
+            envVersionAudio = v;
         }
     }
 
@@ -525,6 +569,18 @@ void VassaGruuvProcessor::getStateInformation (juce::MemoryBlock& dest)
         }
     root.appendChild (smp, nullptr);
 
+    juce::ValueTree envTree ("Envelopes");
+    for (int t = 0; t < numTracks; ++t)
+        for (int k = 0; k < numEnvKinds; ++k)
+        {
+            juce::ValueTree c ("Env");
+            c.setProperty ("track", t, nullptr);
+            c.setProperty ("kind", k, nullptr);
+            c.setProperty ("data", getEnv (t, k).toString(), nullptr);
+            envTree.appendChild (c, nullptr);
+        }
+    root.appendChild (envTree, nullptr);
+
     if (auto xml = root.createXml())
         copyXmlToBinary (*xml, dest);
 }
@@ -544,6 +600,16 @@ void VassaGruuvProcessor::setStateInformation (const void* data, int size)
     const auto params = root.getChildWithName (apvts.state.getType());
     if (params.isValid())
         apvts.replaceState (params);
+
+    for (int t = 0; t < numTracks; ++t)
+        for (int k = 0; k < numEnvKinds; ++k)
+            setEnv (t, k, defaultEnv (k));
+    for (const auto& c : root.getChildWithName ("Envelopes"))
+    {
+        const int t = c.getProperty ("track"), k = c.getProperty ("kind");
+        if (t >= 0 && t < numTracks && k >= 0 && k < numEnvKinds)
+            setEnv (t, k, EnvShape::fromString (c.getProperty ("data").toString(), k));
+    }
 
     for (int t = 0; t < numTracks; ++t)
         resetToFactorySample (t);
