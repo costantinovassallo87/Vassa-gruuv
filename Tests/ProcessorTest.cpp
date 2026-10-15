@@ -44,11 +44,62 @@ Result run (bool routeTrack1, bool addStep)
     }
     return r;
 }
+
+vg::PatternGrid grid (VassaGruuvProcessor& p) { return p.pattern.snapshotVelocities(); }
+
+void testGeneration()
+{
+    VassaGruuvProcessor proc;
+    proc.pattern.clear();
+    for (int s = 0; s < 16; s += 2)
+        proc.pattern.set (vg::Velocity, 3, s, 77); // track 4 (Clap): a marker pattern
+    proc.pattern.set (vg::Nudge, 3, 0, 10);
+    const auto before = grid (proc)[3];
+
+    proc.setTrackLocked (3, true);
+    proc.generateLocal (0, 0.6f);
+    check (grid (proc)[3] == before && proc.pattern.get (vg::Nudge, 3, 0) == 10, "a locked track survives Generate untouched");
+    int others = 0;
+    const auto now = grid (proc);
+    for (int t = 0; t < 16; ++t)
+        if (t != 3)
+            for (auto v : now[(size_t) t]) others += v > 0;
+    check (others > 5, "unlocked tracks are generated");
+    check (std::abs (proc.apvts.getRawParameterValue ("tempo")->load() - 120.0f) < 0.01f, "tempo is left alone while a track is locked");
+
+    proc.setTrackLocked (3, false);
+    proc.generateLocal (4 /* Trap */, 0.6f);
+    check (std::abs (proc.apvts.getRawParameterValue ("tempo")->load() - 140.0f) < 0.1f, "tempo follows the genre when nothing is locked");
+
+    const auto kickBefore = grid (proc)[0], snareBefore = grid (proc)[2];
+    for (int i = 0; i < 10; ++i)
+        proc.regenerateTrack (5 /* Hat C */, 0, 1.0f);
+    check (grid (proc)[0] == kickBefore && grid (proc)[2] == snareBefore, "regenerating one track leaves the others alone");
+
+    proc.pattern.clear();
+    proc.pattern.set (vg::Velocity, 0, 0, 100);
+    proc.pattern.set (vg::Velocity, 0, 4, 100);
+    proc.humanize (0, 1.0f, 1.0f);
+    bool moved = proc.pattern.get (vg::Nudge, 0, 0) != 0 || proc.pattern.get (vg::Nudge, 0, 4) != 0;
+    check (moved && proc.pattern.get (vg::Velocity, 0, 0) > 0 && proc.pattern.get (vg::Velocity, 0, 1) == 0, "humanize jitters timing and velocity of active steps only");
+    check (std::abs (proc.pattern.get (vg::Nudge, 0, 0)) <= 25, "humanize stays within +-25 % of a step");
+    proc.quantize (-1);
+    check (proc.pattern.get (vg::Nudge, 0, 0) == 0 && proc.pattern.get (vg::Nudge, 0, 4) == 0, "quantize clears the nudge");
+
+    // Locks survive a state round trip
+    proc.setTrackLocked (7, true);
+    juce::MemoryBlock state;
+    proc.getStateInformation (state);
+    VassaGruuvProcessor other;
+    other.setStateInformation (state.getData(), (int) state.getSize());
+    check (other.isTrackLocked (7) && ! other.isTrackLocked (6), "locks are saved with the project");
+}
 } // namespace
 
 int main()
 {
     juce::ScopedJuceInitialiser_GUI init;
+    testGeneration();
 
     const auto silent = run (false, false);
     check (silent.mainPeak < 1.0e-6f, "empty pattern is silent");

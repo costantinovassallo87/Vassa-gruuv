@@ -71,6 +71,9 @@ VassaGruuvProcessor::VassaGruuvProcessor()
         for (int i = 0; i < numTP; ++i)
             tpPtr[(size_t) t][(size_t) i] = apvts.getRawParameterValue (trackParamId (t, i));
 
+    for (auto& l : trackLocked)
+        l.store (false);
+
     pMaster = apvts.getRawParameterValue ("master");
     pTempo  = apvts.getRawParameterValue ("tempo");
     pSwing  = apvts.getRawParameterValue ("swing");
@@ -430,10 +433,57 @@ void VassaGruuvProcessor::setParam (const juce::String& id, float plainValue)
 
 void VassaGruuvProcessor::applyGroove (const GeneratedGroove& g)
 {
-    pattern.clearMods();
-    pattern.assignVelocities (g.steps);
-    if (g.bpm)   setParam ("tempo", (float) *g.bpm);
-    if (g.swing) setParam ("swing", *g.swing);
+    bool anyLocked = false;
+    for (int t = 0; t < numTracks; ++t)
+    {
+        if (isTrackLocked (t))
+        {
+            anyLocked = true;
+            continue;
+        }
+        pattern.clearTrackMods (t);
+        for (int s = 0; s < numSteps; ++s)
+            pattern.set (Velocity, t, s, g.steps[(size_t) t][(size_t) s]);
+    }
+
+    if (! anyLocked) // with locked tracks the tempo and swing stay as they are
+    {
+        if (g.bpm)   setParam ("tempo", (float) *g.bpm);
+        if (g.swing) setParam ("swing", *g.swing);
+    }
+}
+
+void VassaGruuvProcessor::regenerateTrack (int track, int style, float density)
+{
+    const auto row = PatternGenerator::generateTrack (style, track, density, rng);
+    pattern.clearTrackMods (track);
+    for (int s = 0; s < numSteps; ++s)
+        pattern.set (Velocity, track, s, row[(size_t) s]);
+    aiStatus = "Regenerated " + getTrackName (track);
+}
+
+void VassaGruuvProcessor::humanize (int track, float timing, float velocity)
+{
+    const int first = track < 0 ? 0 : track, last = track < 0 ? numTracks - 1 : track;
+    for (int t = first; t <= last; ++t)
+        for (int s = 0; s < numSteps; ++s)
+        {
+            const int v = pattern.get (Velocity, t, s);
+            if (v <= 0)
+                continue;
+            pattern.set (Nudge, t, s, pattern.get (Nudge, t, s) + juce::roundToInt ((rng.nextFloat() * 2.0f - 1.0f) * timing * 25.0f));
+            pattern.set (Velocity, t, s, juce::jmax (1, v + juce::roundToInt ((rng.nextFloat() * 2.0f - 1.0f) * velocity * 20.0f)));
+        }
+    aiStatus = track < 0 ? "Humanized all tracks" : "Humanized " + getTrackName (track);
+}
+
+void VassaGruuvProcessor::quantize (int track)
+{
+    const int first = track < 0 ? 0 : track, last = track < 0 ? numTracks - 1 : track;
+    for (int t = first; t <= last; ++t)
+        for (int s = 0; s < numSteps; ++s)
+            pattern.set (Nudge, t, s, 0);
+    aiStatus = track < 0 ? "Quantized all tracks" : "Quantized " + getTrackName (track);
 }
 
 void VassaGruuvProcessor::generateLocal (int style, float density)
@@ -512,6 +562,10 @@ void VassaGruuvProcessor::getStateInformation (juce::MemoryBlock& dest)
     juce::ValueTree root ("VassaGruuvState");
     root.setProperty ("version", 2, nullptr);
     root.setProperty ("pattern", pattern.toHex(), nullptr);
+    juce::String locks;
+    for (int t = 0; t < numTracks; ++t)
+        locks << (isTrackLocked (t) ? "1" : "0");
+    root.setProperty ("locks", locks, nullptr);
     root.appendChild (apvts.copyState(), nullptr);
 
     juce::ValueTree smp ("Samples");
@@ -541,6 +595,9 @@ void VassaGruuvProcessor::setStateInformation (const void* data, int size)
         return;
 
     pattern.fromHex (root.getProperty ("pattern").toString());
+    const auto locks = root.getProperty ("locks").toString();
+    for (int t = 0; t < numTracks; ++t)
+        setTrackLocked (t, locks[t] == '1');
 
     const auto params = root.getChildWithName (apvts.state.getType());
     if (params.isValid())

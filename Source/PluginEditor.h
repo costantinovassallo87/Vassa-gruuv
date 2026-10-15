@@ -39,7 +39,7 @@ public:
 // Section panel with a title chip
 void drawPanel (juce::Graphics&, juce::Rectangle<int>, const juce::String& title, int titleWidth = 120);
 
-constexpr int gridLabelW = 140; // shared by the step and modulation grids so their columns line up
+constexpr int gridLabelW = 180; // shared by the step and modulation grids so their columns line up
 
 class StepGrid : public juce::Component
 {
@@ -52,9 +52,13 @@ public:
 
     int selected = 0;
     int playhead = -1;
+    std::function<int()> currentStyle; // genre used when regenerating a single track
 
 private:
     static constexpr int headerH = 14;
+    // Row controls, right-aligned in the label column: regenerate, lock, mute, solo
+    static juce::Rectangle<float> box (int index, float y, float rowH);
+    void rowMenu (int track);
     bool cellAt (juce::Point<int>, int& track, int& step) const;
     void toggleParam (int track, int tp);
 
@@ -193,7 +197,7 @@ private:
 
     // Step sequencer
     juce::ComboBox styleBox;
-    juce::TextButton generateButton { "Generate" }, mutateButton { "Mutate" }, clearButton { "Clear" };
+    juce::TextButton generateButton { "Generate" }, mutateButton { "Mutate" }, humanizeButton { "Humanize" }, clearButton { "Clear" };
     vgui::StepGrid stepGrid;
     juce::Label statusLabel;
 

@@ -53,7 +53,13 @@ public:
 
     // Pattern tools (the AI hooks live here)
     void generateLocal (int style, float density);
+    void regenerateTrack (int track, int style, float density);
     void mutatePattern (float amount);
+    // amounts 0..1; track -1 = all tracks
+    void humanize (int track, float timing, float velocity);
+    void quantize (int track);
+    bool isTrackLocked (int track) const { return trackLocked[(size_t) track].load(); }
+    void setTrackLocked (int track, bool locked) { trackLocked[(size_t) track].store (locked); }
     void clearPattern();
     bool requestClaude (const juce::String& prompt);
     bool isClaudeBusy() const { return claude.isBusy(); }
@@ -64,6 +70,7 @@ public:
     vg::Pattern pattern;
     std::atomic<int> currentStep { -1 };
     std::atomic<double> currentBpm { 120.0 };
+    std::array<std::atomic<bool>, vg::numTracks> trackLocked; // a locked track keeps its pattern when a new groove is generated
     juce::String aiStatus; // message thread only
 
 private:

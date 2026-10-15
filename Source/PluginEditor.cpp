@@ -226,10 +226,37 @@ void StepGrid::paint (juce::Graphics& g)
         g.drawText (juce::String (t + 1), 4, (int) y, 14, (int) ch, juce::Justification::centredLeft);
         g.setColour (muted ? col::dim.withAlpha (0.6f) : (sel ? col::track (t) : col::text));
         g.setFont (juce::FontOptions (11.0f, sel ? juce::Font::bold : juce::Font::plain));
-        g.drawText (proc.getTrackName (t), 22, (int) y, gridLabelW - 62, (int) ch, juce::Justification::centredLeft);
+        g.drawText (proc.getTrackName (t), 22, (int) y, gridLabelW - 100, (int) ch, juce::Justification::centredLeft);
 
-        const auto mBox = juce::Rectangle<float> ((float) gridLabelW - 36.0f, y + 1.5f, 15.0f, ch - 3.0f);
-        const auto sBox = mBox.translated (17.0f, 0.0f);
+        const bool locked = proc.isTrackLocked (t);
+        const auto rBox = box (0, y, ch), lBox = box (1, y, ch), mBox = box (2, y, ch), sBox = box (3, y, ch);
+
+        // Regenerate: circular arrow
+        g.setColour (col::panelHi);
+        g.fillRoundedRectangle (rBox, 2.0f);
+        {
+            juce::Path arc;
+            const auto c = rBox.getCentre();
+            arc.addCentredArc (c.x, c.y, 3.6f, 3.6f, 0.0f, 0.6f, 5.4f, true);
+            g.setColour (col::accent);
+            g.strokePath (arc, juce::PathStrokeType (1.4f));
+            juce::Path head;
+            head.addTriangle (c.x + 2.0f, c.y - 5.2f, c.x + 5.2f, c.y - 3.4f, c.x + 1.2f, c.y - 2.2f);
+            g.fillPath (head);
+        }
+
+        // Lock: padlock
+        g.setColour (locked ? soloCol : col::panelHi);
+        g.fillRoundedRectangle (lBox, 2.0f);
+        {
+            const auto c = lBox.getCentre();
+            g.setColour (locked ? juce::Colours::black : col::dim);
+            g.fillRoundedRectangle (c.x - 3.5f, c.y - 0.5f, 7.0f, 5.0f, 1.0f);
+            juce::Path shackle;
+            shackle.addCentredArc (c.x + (locked ? 0.0f : 1.5f), c.y - 0.5f, 2.4f, 2.4f, 0.0f, -1.5708f, 1.5708f + 1.5708f, true);
+            g.strokePath (shackle, juce::PathStrokeType (1.3f));
+        }
+
         g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
         g.setColour (muted ? muteCol : col::panelHi);
         g.fillRoundedRectangle (mBox, 2.0f);
@@ -272,6 +299,46 @@ void StepGrid::paint (juce::Graphics& g)
     }
 }
 
+juce::Rectangle<float> StepGrid::box (int index, float y, float rowH)
+{
+    return { (float) gridLabelW - 68.0f + (float) index * 17.0f, y + 1.5f, 15.0f, rowH - 3.0f };
+}
+
+void StepGrid::rowMenu (int t)
+{
+    juce::PopupMenu m;
+    m.addItem (1, "Regenerate this track");
+    m.addItem (2, proc.isTrackLocked (t) ? "Unlock track" : "Lock track", true, proc.isTrackLocked (t));
+    m.addSeparator();
+    m.addItem (3, "Humanize (light)");
+    m.addItem (4, "Humanize (medium)");
+    m.addItem (5, "Humanize (heavy)");
+    m.addItem (6, "Quantize (clear nudge)");
+    m.addSeparator();
+    m.addItem (7, "Clear track");
+
+    juce::Component::SafePointer<StepGrid> safe (this);
+    m.showMenuAsync ({}, [safe, t] (int r)
+                     {
+                         if (safe == nullptr || r == 0)
+                             return;
+                         auto& p = safe->proc;
+                         if (r == 1) p.regenerateTrack (t, safe->currentStyle ? safe->currentStyle() : 0, 0.6f);
+                         else if (r == 2) p.setTrackLocked (t, ! p.isTrackLocked (t));
+                         else if (r == 3) p.humanize (t, 0.3f, 0.3f);
+                         else if (r == 4) p.humanize (t, 0.6f, 0.5f);
+                         else if (r == 5) p.humanize (t, 1.0f, 0.8f);
+                         else if (r == 6) p.quantize (t);
+                         else if (r == 7)
+                         {
+                             for (int s = 0; s < vg::numSteps; ++s)
+                                 p.pattern.set (vg::Velocity, t, s, 0);
+                             p.pattern.clearTrackMods (t);
+                         }
+                         safe->repaint();
+                     });
+}
+
 void StepGrid::toggleParam (int track, int tp)
 {
     if (auto* p = proc.apvts.getParameter (vg::trackParamId (track, tp)))
@@ -285,9 +352,17 @@ void StepGrid::mouseDown (const juce::MouseEvent& e)
     if (e.x < gridLabelW && e.y >= headerH)
     {
         const int t = juce::jlimit (0, vg::numTracks - 1, (int) ((float) (e.y - headerH) / ch));
-        if (e.x >= gridLabelW - 36 && e.x < gridLabelW - 21)
+        const auto pt = e.position;
+        const float y = (float) headerH + (float) t * ch;
+        if (e.mods.isPopupMenu())
+            rowMenu (t);
+        else if (box (0, y, ch).expanded (1.0f).contains (pt))
+            proc.regenerateTrack (t, currentStyle ? currentStyle() : 0, 0.6f);
+        else if (box (1, y, ch).expanded (1.0f).contains (pt))
+            proc.setTrackLocked (t, ! proc.isTrackLocked (t));
+        else if (box (2, y, ch).expanded (1.0f).contains (pt))
             toggleParam (t, vg::TPMute);
-        else if (e.x >= gridLabelW - 19 && e.x < gridLabelW - 4)
+        else if (box (3, y, ch).expanded (1.0f).contains (pt))
             toggleParam (t, vg::TPSolo);
         else
         {
@@ -299,7 +374,7 @@ void StepGrid::mouseDown (const juce::MouseEvent& e)
     }
 
     int t, s;
-    if (! cellAt (e.getPosition(), t, s))
+    if (e.mods.isPopupMenu() || ! cellAt (e.getPosition(), t, s))
         return;
 
     select (t);
@@ -977,6 +1052,41 @@ MainPanel::MainPanel (VassaGruuvProcessor& p)
     addAndMakeVisible (generateButton);
     addAndMakeVisible (mutateButton);
     addAndMakeVisible (clearButton);
+    addAndMakeVisible (humanizeButton);
+    stepGrid.currentStyle = [this] { return styleBox.getSelectedId() - 1; };
+    humanizeButton.onClick = [this]
+    {
+        juce::PopupMenu m;
+        m.addSectionHeader ("Selected track");
+        m.addItem (1, "Humanize (light)");
+        m.addItem (2, "Humanize (medium)");
+        m.addItem (3, "Humanize (heavy)");
+        m.addItem (4, "Quantize (clear nudge)");
+        m.addSectionHeader ("All tracks");
+        m.addItem (5, "Humanize (light)");
+        m.addItem (6, "Humanize (medium)");
+        m.addItem (7, "Humanize (heavy)");
+        m.addItem (8, "Quantize (clear nudge)");
+        m.addSeparator();
+        m.addItem (9, "Unlock all tracks");
+        juce::Component::SafePointer<MainPanel> safe (this);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (humanizeButton), [safe] (int r)
+                         {
+                             if (safe == nullptr || r == 0)
+                                 return;
+                             auto& pr = safe->proc;
+                             const int t = r <= 4 ? safe->selectedTrack : -1;
+                             static const float timing[] = { 0.3f, 0.6f, 1.0f }, vel[] = { 0.3f, 0.5f, 0.8f };
+                             const int k = (r - 1) % 4;
+                             if (k < 3)
+                                 pr.humanize (t, timing[k], vel[k]);
+                             else if (r != 9)
+                                 pr.quantize (t);
+                             if (r == 9)
+                                 for (int i = 0; i < vg::numTracks; ++i)
+                                     pr.setTrackLocked (i, false);
+                         });
+    };
     generateButton.onClick = [this] { proc.generateLocal (styleBox.getSelectedId() - 1, 0.6f); };
     mutateButton.onClick = [this] { proc.mutatePattern (0.5f); };
     clearButton.onClick = [this] { proc.clearPattern(); };
@@ -1154,11 +1264,12 @@ void MainPanel::resized()
     exportButton.setBounds (912, 20, 72, 26);
 
     // Step sequencer
-    styleBox.setBounds (590, 72, 120, 22);
-    generateButton.setBounds (716, 72, 80, 22);
-    mutateButton.setBounds (800, 72, 70, 22);
-    clearButton.setBounds (874, 72, 60, 22);
-    statusLabel.setBounds (150, 72, 430, 22);
+    styleBox.setBounds (520, 72, 140, 22);
+    generateButton.setBounds (666, 72, 76, 22);
+    mutateButton.setBounds (746, 72, 66, 22);
+    humanizeButton.setBounds (816, 72, 86, 22);
+    clearButton.setBounds (906, 72, 76, 22);
+    statusLabel.setBounds (150, 72, 360, 22);
     stepGrid.setBounds (8, 96, 984, 266);
 
     // Modulation

@@ -4,6 +4,7 @@
 #include "Engine/Factory.h"
 #include "Engine/Sampler.h"
 #include "Engine/Scheduler.h"
+#include <set>
 
 using namespace vg;
 
@@ -73,19 +74,52 @@ struct VassaTests : public juce::UnitTest
             expectEquals (a.get (Pitch, 0, 0), 24); // clamped
         }
 
-        beginTest ("Generator + mutate stay valid");
+        beginTest ("Generator: genres, hybrid, per-track regeneration");
         {
             juce::Random rng (1234);
-            for (int s = 0; s < PatternGenerator::styleNames().size(); ++s)
+            const auto names = PatternGenerator::styleNames();
+            expect (names.size() >= 21, "at least 20 genres plus the ??? hybrid");
+            expectEquals (names[names.size() - 1], juce::String ("???"));
+            expectEquals (PatternGenerator::hybridIndex(), names.size() - 1);
+
+            for (int s = 0; s < names.size(); ++s)
             {
                 auto g = PatternGenerator::generate (s, 0.5f, rng);
-                expect (g.steps[0][0] > 0, "style " + juce::String (s));
+                int hits = 0;
+                for (auto& row : g.steps)
+                    for (auto v : row)
+                    {
+                        expect (v <= 127);
+                        hits += v > 0;
+                    }
+                expect (hits >= 6, names[s] + " produced only " + juce::String (hits) + " hits");
+                expect (g.bpm.has_value() && g.swing.has_value());
+
+                for (int t = 0; t < numTracks; ++t) // every genre can regenerate every track (role-based fallback)
+                {
+                    const auto row = PatternGenerator::generateTrack (s, t, 0.6f, rng);
+                    int n = 0;
+                    for (auto v : row) n += v > 0;
+                    expect (n >= 1, names[s] + " track " + juce::String (t) + " is empty");
+                }
+
                 for (int i = 0; i < 20; ++i)
                     PatternGenerator::mutate (g.steps, 1.0f, rng);
                 for (auto& row : g.steps)
                     for (auto v : row)
                         expect (v <= 127);
             }
+
+            // Variants: regenerating a track in a genre with several variants must not always give the same row
+            std::set<juce::String> seen;
+            for (int i = 0; i < 40; ++i)
+            {
+                const auto row = PatternGenerator::generateTrack (0 /* House */, 0, 1.0f, rng);
+                juce::String key;
+                for (auto v : row) key << (v > 0 ? "1" : "0");
+                seen.insert (key);
+            }
+            expect (seen.size() >= 2, "kick regeneration offers more than one variant");
         }
 
         beginTest ("parseGrooveJson accepts fenced / chatty replies");

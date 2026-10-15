@@ -21,8 +21,12 @@ Tema scuro stile hardware, colore per famiglia di tracce, knob con arco (bipolar
 - **Drag & drop multitraccia**: trascina il badge *DRAG STEMS TO DAW* su una traccia del DAW → un WAV 24-bit stereo per ogni traccia con step (1/2/4/8 battute, coda del reverb ripiegata all'inizio per loop senza buchi). *Export…* scrive gli stessi file in una cartella.
 - Input MIDI: note C1–D#2 (36–51) suonano le tracce.
 
-## Pattern tools / AI (backend già presente, UI da integrare)
-*Generate / Mutate* (generatore locale per stile) e client Claude (`requestClaude`, chiave API da `ANTHROPIC_API_KEY` o impostazioni utente) sono in `Source/AI` e `PluginProcessor`; nella UI restano solo Generate/Mutate/Clear.
+## Generate e pattern tools
+- **Generate** per genere: 20 generi (House, Techno, Hip-Hop, Boom Bap, Trap, D&B, Funk, Disco, Jazz, Reggaeton, Latin, Breakbeat, Dubstep, UK Garage, Electro, Rock, Metal, Afrobeat, Lo-Fi, Trance) con più varianti per parte, e il genere **???** che assembla ogni traccia da un genere diverso (kit/beat ibridi). Con il tasto **Mutate** si variano pattern e velocity.
+- **Lock** per traccia (lucchetto): una traccia bloccata non viene toccata da Generate (né dai pattern di Claude). Con tracce bloccate anche tempo e swing restano invariati. Salvato nel progetto.
+- **Rigenera** una singola traccia (pulsante ↻ sulla riga, o click destro → *Regenerate this track*), nel genere scelto; funziona anche per tracce che il genere non prevede (pattern generico per ruolo).
+- **Humanize / Quantize**: dal pulsante *Humanize* (traccia selezionata o tutte) o dal click destro su una riga; light / medium / heavy. Humanize sposta il timing (fino a ±25% di step, via lane Nudge) e varia la velocity; Quantize azzera il nudge.
+- Il client Claude (`requestClaude`, chiave da `ANTHROPIC_API_KEY` o impostazioni utente) è nel codice, pronto per l'integrazione nella UI.
 
 ## Build (macOS, Apple Silicon)
 ```sh

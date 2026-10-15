@@ -55,6 +55,13 @@ public:
 
     static int resetValue (int lane) noexcept { return lane == Velocity ? 0 : laneInfo (lane).def; }
 
+    void clearTrackMods (int track) noexcept
+    {
+        for (int l = 1; l < numLanes; ++l)
+            for (int s = 0; s < numSteps; ++s)
+                set (l, track, s, resetValue (l));
+    }
+
     void clearMods() noexcept
     {
         for (int l = 1; l < numLanes; ++l)
