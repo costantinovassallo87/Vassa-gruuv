@@ -22,7 +22,7 @@ bool parseGrooveJson (const juce::String& text, GeneratedGroove& out, juce::Stri
     }
 
     GeneratedGroove g;
-    for (int p = 0; p < juce::jmin (numPads, rows->size()); ++p)
+    for (int p = 0; p < juce::jmin (numTracks, rows->size()); ++p)
     {
         const auto* cols = (*rows)[p].getArray();
         if (cols == nullptr)
@@ -44,8 +44,8 @@ bool parseGrooveJson (const juce::String& text, GeneratedGroove& out, juce::Stri
 juce::String ClaudeClient::systemPrompt()
 {
     juce::String pads;
-    for (int i = 0; i < numPads; ++i)
-        pads << i << " = " << padInfo (i).name << (i + 1 < numPads ? ", " : "");
+    for (int i = 0; i < numTracks; ++i)
+        pads << i << " = " << padInfo (i).name << (i + 1 < numTracks ? ", " : "");
 
     return "You are the groove designer inside a drum machine plug-in. The user describes a beat; you answer with ONE "
            "JSON object and nothing else (no prose, no code fences).\n"

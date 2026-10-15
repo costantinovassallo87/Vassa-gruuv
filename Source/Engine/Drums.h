@@ -7,13 +7,6 @@
 
 namespace vg
 {
-struct Sample
-{
-    juce::AudioBuffer<float> data; // 1 or 2 channels
-    double rate = 44100.0;
-    juce::String path;
-};
-
 enum class Kind { Kick, Snare, Clap, Rim, HatClosed, HatOpen, Tom, Cowbell, Crash, Shaker, Zap };
 
 struct PadInfo
@@ -26,7 +19,7 @@ struct PadInfo
 
 inline const PadInfo& padInfo (int pad)
 {
-    static const PadInfo table[numPads] = {
+    static const PadInfo table[numTracks] = {
         { "Kick",    Kind::Kick,       58.f,  -1 },
         { "Kick 2",  Kind::Kick,       44.f,  -1 },
         { "Snare",   Kind::Snare,      190.f, -1 },
@@ -44,7 +37,7 @@ inline const PadInfo& padInfo (int pad)
         { "Perc 3",  Kind::Rim,        2600.f, -1 },
         { "FX",      Kind::Zap,        1500.f, -1 },
     };
-    return table[juce::jlimit (0, numPads - 1, pad)];
+    return table[juce::jlimit (0, numTracks - 1, pad)];
 }
 
 // One monophonic drum voice per pad: built-in synthesis, or sample playback when a sample is loaded.
@@ -55,16 +48,14 @@ public:
     bool isActive() const noexcept { return active; }
     void choke() noexcept { choking = true; }
 
-    void trigger (int pad, float velocity, float tuneSemitones, float decayScale, std::shared_ptr<const Sample> s)
+    void trigger (int pad, float velocity, float tuneSemitones, float decayScale)
     {
         info = &padInfo (pad);
         vel = velocity;
         ratio = std::pow (2.0f, tuneSemitones / 12.0f);
         decay = decayScale;
-        sample = std::move (s);
 
         age = 0;
-        samplePos = 0.0;
         phase = phase2 = 0.0f;
         for (auto& p : metal) p = 0.0f;
         hpState = lpState = 0.0f;
@@ -81,12 +72,8 @@ public:
         if (! active)
             return;
 
-        float l = 0.0f, r = 0.0f;
-
-        if (sample != nullptr)
-            renderSample (l, r);
-        else
-            l = r = renderSynth();
+        const float l = renderSynth();
+        const float r = l;
 
         if (choking)
         {
@@ -145,34 +132,6 @@ private:
         ampCoeff = coeff (tauAmp * decay);
         env2Coeff = coeff (tau2);
         pitchCoeff = coeff (tauPitch);
-
-        if (sample != nullptr)
-            ampCoeff = decay < 0.99f ? coeff (0.5f * decay) : 1.0f; // samples: decay<1 shortens the tail
-    }
-
-    void renderSample (float& l, float& r)
-    {
-        const auto& d = sample->data;
-        const int n = d.getNumSamples();
-        const int i = (int) samplePos;
-        if (i >= n - 1)
-        {
-            active = false;
-            return;
-        }
-
-        const float f = (float) (samplePos - (double) i);
-        const float* c0 = d.getReadPointer (0);
-        const float* c1 = d.getNumChannels() > 1 ? d.getReadPointer (1) : c0;
-        l = c0[i] * (1.0f - f) + c0[i + 1] * f;
-        r = c1[i] * (1.0f - f) + c1[i + 1] * f;
-        l *= ampEnv;
-        r *= ampEnv;
-
-        samplePos += (double) ratio * sample->rate / sampleRate;
-        ampEnv *= ampCoeff;
-        if (ampEnv < 1.0e-4f)
-            active = false;
     }
 
     float renderSynth()
@@ -268,10 +227,8 @@ private:
     }
 
     const PadInfo* info = &padInfo (0);
-    std::shared_ptr<const Sample> sample;
     juce::Random rng;
     double sampleRate = 44100.0;
-    double samplePos = 0.0;
     int age = 0;
     bool active = false, choking = false;
     float vel = 1.0f, ratio = 1.0f, decay = 1.0f;

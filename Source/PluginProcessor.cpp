@@ -6,8 +6,7 @@ using namespace vg;
 
 namespace
 {
-constexpr int firstMidiNote = 36; // C1 = pad 1, like most groove boxes
-constexpr double stepPpq = 0.25;  // one 16th note
+constexpr int firstMidiNote = 36; // C1 = track 1
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout VassaGruuvProcessor::createLayout()
@@ -19,44 +18,59 @@ juce::AudioProcessorValueTreeState::ParameterLayout VassaGruuvProcessor::createL
                                                              juce::NormalisableRange<float> (40.f, 240.f, 0.1f), 120.f));
     layout.add (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "swing", 1 }, "Swing",
                                                              juce::NormalisableRange<float> (0.f, 1.f, 0.01f), 0.f));
-    layout.add (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "filter", 1 }, "Filter",
+    layout.add (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "filter", 1 }, "Master Filter",
                                                              juce::NormalisableRange<float> (80.f, 20000.f, 1.f, 0.25f), 20000.f));
     layout.add (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "reverb", 1 }, "Reverb",
                                                              juce::NormalisableRange<float> (0.f, 1.f, 0.01f), 0.12f));
     layout.add (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "master", 1 }, "Master",
                                                              juce::NormalisableRange<float> (0.f, 1.5f, 0.01f), 0.8f));
 
-    for (int i = 0; i < numPads; ++i)
-    {
-        const juce::String n = padInfo (i).name;
-        layout.add (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { padId (i, "level"), 1 }, n + " Level",
-                                                                 juce::NormalisableRange<float> (0.f, 1.5f, 0.01f), 0.9f));
-        layout.add (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { padId (i, "pan"), 1 }, n + " Pan",
-                                                                 juce::NormalisableRange<float> (-1.f, 1.f, 0.01f), 0.f));
-        layout.add (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { padId (i, "tune"), 1 }, n + " Tune",
-                                                                 juce::NormalisableRange<float> (-12.f, 12.f, 0.1f), 0.f));
-        layout.add (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { padId (i, "decay"), 1 }, n + " Decay",
-                                                                 juce::NormalisableRange<float> (0.2f, 3.f, 0.01f, 0.6f), 1.f));
-        layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { padId (i, "mute"), 1 }, n + " Mute", false));
-    }
+    for (int t = 0; t < numTracks; ++t)
+        for (int i = 0; i < numTP; ++i)
+        {
+            const auto& sp = tpSpec (i);
+            const juce::ParameterID id { trackParamId (t, i), 1 };
+            const juce::String name = "Track " + juce::String (t + 1) + " " + sp.name;
+
+            switch (sp.type)
+            {
+                case TPType::Float:
+                    layout.add (std::make_unique<juce::AudioParameterFloat> (
+                        id, name, juce::NormalisableRange<float> (sp.min, sp.max, 0.0f, sp.skew), sp.def,
+                        juce::AudioParameterFloatAttributes().withLabel (sp.unit)));
+                    break;
+                case TPType::Int:
+                    layout.add (std::make_unique<juce::AudioParameterInt> (id, name, (int) sp.min, (int) sp.max, (int) sp.def,
+                                                                           juce::AudioParameterIntAttributes().withLabel (sp.unit)));
+                    break;
+                case TPType::Bool:
+                    layout.add (std::make_unique<juce::AudioParameterBool> (id, name, sp.def > 0.5f));
+                    break;
+                case TPType::Choice:
+                    layout.add (std::make_unique<juce::AudioParameterChoice> (id, name, juce::StringArray::fromTokens (sp.choices, "|", ""),
+                                                                              (int) sp.def));
+                    break;
+            }
+        }
     return layout;
 }
 
+juce::AudioProcessor::BusesProperties VassaGruuvProcessor::makeBuses()
+{
+    auto props = BusesProperties().withOutput ("Main Mix", juce::AudioChannelSet::stereo(), true);
+    for (int t = 0; t < numTracks; ++t)
+        props = props.withOutput ("Track " + juce::String (t + 1), juce::AudioChannelSet::stereo(), false);
+    return props;
+}
+
 VassaGruuvProcessor::VassaGruuvProcessor()
-    : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+    : AudioProcessor (makeBuses()),
       apvts (*this, nullptr, "PARAMS", createLayout())
 {
-    for (auto& f : padFlash)
-        f.store (0.0f);
+    for (int t = 0; t < numTracks; ++t)
+        for (int i = 0; i < numTP; ++i)
+            tpPtr[(size_t) t][(size_t) i] = apvts.getRawParameterValue (trackParamId (t, i));
 
-    for (int i = 0; i < numPads; ++i)
-    {
-        pLevel[(size_t) i] = apvts.getRawParameterValue (padId (i, "level"));
-        pPan[(size_t) i]   = apvts.getRawParameterValue (padId (i, "pan"));
-        pTune[(size_t) i]  = apvts.getRawParameterValue (padId (i, "tune"));
-        pDecay[(size_t) i] = apvts.getRawParameterValue (padId (i, "decay"));
-        pMute[(size_t) i]  = apvts.getRawParameterValue (padId (i, "mute"));
-    }
     pMaster = apvts.getRawParameterValue ("master");
     pTempo  = apvts.getRawParameterValue ("tempo");
     pSwing  = apvts.getRawParameterValue ("swing");
@@ -65,6 +79,8 @@ VassaGruuvProcessor::VassaGruuvProcessor()
     pRun    = apvts.getRawParameterValue ("run");
 
     formatManager.registerBasicFormats();
+    for (int t = 0; t < numTracks; ++t)
+        resetToFactorySample (t);
 
     juce::PropertiesFile::Options opts;
     opts.applicationName = "VassaGruuv";
@@ -83,17 +99,24 @@ VassaGruuvProcessor::~VassaGruuvProcessor()
 
 bool VassaGruuvProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
-    return layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo()
-           && layouts.getMainInputChannelSet().isDisabled();
+    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
+        return false;
+    for (const auto& bus : layouts.outputBuses)
+        if (! bus.isDisabled() && bus != juce::AudioChannelSet::stereo())
+            return false;
+    return layouts.inputBuses.isEmpty() || layouts.getMainInputChannelSet().isDisabled();
 }
 
 void VassaGruuvProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     sr = sampleRate;
-    for (auto& v : voices)
-        v.prepare (sampleRate);
+    for (auto& s : samplers)
+        s.reset();
 
-    juce::dsp::ProcessSpec spec { sampleRate, (juce::uint32) samplesPerBlock, 1 };
+    scratchCap = juce::jmax (samplesPerBlock, 1024);
+    scratch.setSize (2, scratchCap);
+
+    juce::dsp::ProcessSpec spec { sampleRate, (juce::uint32) scratchCap, 1 };
     for (auto& f : lowpass)
     {
         f.prepare (spec);
@@ -107,32 +130,36 @@ void VassaGruuvProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     internalPpq = 0.0;
 }
 
-void VassaGruuvProcessor::startVoice (int pad, float vel)
+TrackParams VassaGruuvProcessor::readTrackParams (int track) const
 {
-    const auto p = (size_t) pad;
-    if (pMute[p]->load() > 0.5f)
+    TrackParams p;
+    for (int i = 0; i < numTP; ++i)
+        p.v[i] = tpPtr[(size_t) track][(size_t) i]->load (std::memory_order_relaxed);
+    return p;
+}
+
+void VassaGruuvProcessor::startTrig (const Trig& e, bool anySolo)
+{
+    const auto t = (size_t) e.track;
+    if (e.noteOff)
+    {
+        samplers[t].releaseHeld();
+        return;
+    }
+
+    if (tpPtr[t][TPMute]->load() > 0.5f || (anySolo && tpPtr[t][TPSolo]->load() < 0.5f))
         return;
 
     std::shared_ptr<const Sample> smp;
     {
         const juce::SpinLock::ScopedTryLockType l (sampleLock);
         if (l.isLocked())
-            smp = samples[p];
+            smp = samples[t];
     }
+    if (smp == nullptr)
+        return;
 
-    const int group = padInfo (pad).chokeGroup;
-    if (group >= 0)
-        for (int o = 0; o < numPads; ++o)
-            if (o != pad && padInfo (o).chokeGroup == group)
-                voices[(size_t) o].choke();
-
-    voices[p].trigger (pad, vel, pTune[p]->load(), pDecay[p]->load(), std::move (smp));
-
-    const float angle = (pPan[p]->load() + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
-    const float level = pLevel[p]->load() * 1.4142f;
-    gainL[p] = std::cos (angle) * level;
-    gainR[p] = std::sin (angle) * level;
-    padFlash[p].store (vel, std::memory_order_relaxed);
+    samplers[t].noteOn (readTrackParams (e.track), std::move (smp), e.vel, e.pitch, e.slice, e.gate, sr);
 }
 
 void VassaGruuvProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -141,79 +168,103 @@ void VassaGruuvProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     const int n = buffer.getNumSamples();
     buffer.clear();
 
-    int numEvents = 0;
-    auto addEvent = [&] (int pos, int pad, float vel)
-    {
-        if (numEvents < (int) events.size())
-            events[(size_t) numEvents++] = { juce::jlimit (0, n - 1, pos), pad, vel };
-    };
+    auto mainBus = getBusBuffer (buffer, false, 0);
+    float* mainL = mainBus.getWritePointer (0);
+    float* mainR = mainBus.getWritePointer (1);
 
-    // --- Triggers from the UI ---
+    // Output routing: a track goes to its own bus when the host enabled it, otherwise into the main mix.
+    std::array<float*, numTracks> dstL {}, dstR {};
+    for (int t = 0; t < numTracks; ++t)
     {
-        const auto scope = uiFifo.read (uiFifo.getNumReady());
-        for (int i = 0; i < scope.blockSize1; ++i) addEvent (0, uiPads[(size_t) (scope.startIndex1 + i)], uiVels[(size_t) (scope.startIndex1 + i)]);
-        for (int i = 0; i < scope.blockSize2; ++i) addEvent (0, uiPads[(size_t) (scope.startIndex2 + i)], uiVels[(size_t) (scope.startIndex2 + i)]);
+        dstL[(size_t) t] = mainL;
+        dstR[(size_t) t] = mainR;
+        if (auto* bus = getBus (false, t + 1); bus != nullptr && bus->isEnabled())
+        {
+            auto bb = getBusBuffer (buffer, false, t + 1);
+            dstL[(size_t) t] = bb.getWritePointer (0);
+            dstR[(size_t) t] = bb.getWritePointer (1);
+        }
     }
 
-    // --- MIDI notes -> pads ---
+    int numEvents = 0;
+    auto addEvent = [&] (Trig e)
+    {
+        if (numEvents < (int) events.size())
+        {
+            e.pos = juce::jlimit (0, n - 1, e.pos);
+            events[(size_t) numEvents++] = e;
+        }
+    };
+
+    // UI previews
+    {
+        const auto scope = uiFifo.read (uiFifo.getNumReady());
+        for (int i = 0; i < scope.blockSize1; ++i) addEvent (uiTrigs[(size_t) (scope.startIndex1 + i)]);
+        for (int i = 0; i < scope.blockSize2; ++i) addEvent (uiTrigs[(size_t) (scope.startIndex2 + i)]);
+    }
+
+    // MIDI notes -> tracks
     for (const auto meta : midi)
     {
         const auto m = meta.getMessage();
+        const int track = m.getNoteNumber() - firstMidiNote;
+        if (track < 0 || track >= numTracks)
+            continue;
         if (m.isNoteOn())
         {
-            const int pad = m.getNoteNumber() - firstMidiNote;
-            if (pad >= 0 && pad < numPads)
-                addEvent (meta.samplePosition, pad, m.getFloatVelocity());
+            Trig e;
+            e.pos = meta.samplePosition;
+            e.track = track;
+            e.vel = m.getFloatVelocity();
+            e.gate = -1;
+            e.slice = 0;
+            addEvent (e);
+        }
+        else if (m.isNoteOff())
+        {
+            Trig e;
+            e.pos = meta.samplePosition;
+            e.track = track;
+            e.noteOff = true;
+            addEvent (e);
         }
     }
     midi.clear();
 
-    // --- Sequencer (host transport, or internal clock when the host is stopped / absent) ---
+    // Sequencer: host transport, or the internal clock when the host is stopped / absent
     double bpm = pTempo->load();
     bool running = false;
     double ppq0 = 0.0;
 
     if (auto* ph = getPlayHead())
         if (auto pos = ph->getPosition())
+        {
+            if (auto hostBpm = pos->getBpm())
+                bpm = *hostBpm;
             if (pos->getIsPlaying() && pos->getPpqPosition().hasValue())
             {
                 running = true;
                 ppq0 = *pos->getPpqPosition();
-                if (auto hostBpm = pos->getBpm())
-                    bpm = *hostBpm;
             }
+        }
 
     if (! running && pRun->load() > 0.5f)
     {
         running = true;
         ppq0 = internalPpq;
     }
+    currentBpm.store (bpm, std::memory_order_relaxed);
 
     if (running)
     {
-        const double ppqPerSample = bpm / 60.0 / sr;
-        const double ppq1 = ppq0 + n * ppqPerSample;
-        const double swing = pSwing->load();
-
+        const double ppq1 = ppq0 + n * (bpm / 60.0 / sr);
         currentStep.store ((int) (((long long) std::floor (ppq0 / stepPpq) % numSteps + numSteps) % numSteps));
 
-        for (long long k = (long long) std::floor (ppq0 / stepPpq) - 1;; ++k)
-        {
-            const double t = (double) k * stepPpq + ((k & 1) ? swing * stepPpq / 3.0 : 0.0);
-            if (t >= ppq1)
-                break;
-            if (t < ppq0)
-                continue;
+        const int num = collectTrigs (pattern, ppq0, ppq1, bpm, pSwing->load(), sr, scratchTrigs.data(), (int) scratchTrigs.size());
+        for (int i = 0; i < num; ++i)
+            addEvent (scratchTrigs[(size_t) i]);
 
-            const int step = (int) ((k % numSteps + numSteps) % numSteps);
-            const int samplePos = (int) ((t - ppq0) / ppqPerSample);
-            for (int p = 0; p < numPads; ++p)
-                if (const int v = pattern.get (p, step))
-                    addEvent (samplePos, p, (float) v / 127.0f);
-        }
-
-        if (pRun->load() > 0.5f)
-            internalPpq = ppq1;
+        internalPpq = pRun->load() > 0.5f ? ppq1 : 0.0;
     }
     else
     {
@@ -221,40 +272,47 @@ void VassaGruuvProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
         currentStep.store (-1);
     }
 
-    std::stable_sort (events.begin(), events.begin() + numEvents, [] (const Event& a, const Event& b) { return a.pos < b.pos; });
+    std::stable_sort (events.begin(), events.begin() + numEvents, [] (const Trig& a, const Trig& b) { return a.pos < b.pos; });
 
-    // --- Render ---
-    float* outL = buffer.getWritePointer (0);
-    float* outR = buffer.getWritePointer (1);
+    bool anySolo = false;
+    for (int t = 0; t < numTracks; ++t)
+        anySolo |= tpPtr[(size_t) t][TPSolo]->load() > 0.5f;
+
+    // Render, splitting the block at each trigger
     int pos = 0;
-
     auto renderTo = [&] (int end)
     {
-        for (int i = pos; i < end; ++i)
+        while (pos < end)
         {
-            float l = 0.0f, r = 0.0f;
-            for (size_t p = 0; p < voices.size(); ++p)
-                if (voices[p].isActive())
+            const int cnt = juce::jmin (end - pos, scratchCap);
+            for (int t = 0; t < numTracks; ++t)
+            {
+                auto& s = samplers[(size_t) t];
+                if (! s.isActive())
                 {
-                    float vl, vr;
-                    voices[p].render (vl, vr);
-                    l += vl * gainL[p];
-                    r += vr * gainR[p];
+                    s.playhead.store (-1.0f, std::memory_order_relaxed);
+                    continue;
                 }
-            outL[i] = l;
-            outR[i] = r;
+                float* sl = scratch.getWritePointer (0);
+                float* sr2 = scratch.getWritePointer (1);
+                juce::FloatVectorOperations::clear (sl, cnt);
+                juce::FloatVectorOperations::clear (sr2, cnt);
+                s.render (sl, sr2, cnt);
+                juce::FloatVectorOperations::add (dstL[(size_t) t] + pos, sl, cnt);
+                juce::FloatVectorOperations::add (dstR[(size_t) t] + pos, sr2, cnt);
+            }
+            pos += cnt;
         }
-        pos = end;
     };
 
     for (int e = 0; e < numEvents; ++e)
     {
         renderTo (events[(size_t) e].pos);
-        startVoice (events[(size_t) e].pad, events[(size_t) e].vel);
+        startTrig (events[(size_t) e], anySolo);
     }
     renderTo (n);
 
-    // --- Master chain: lowpass -> reverb -> gain -> soft clip ---
+    // Master chain on the main mix only: lowpass -> reverb -> gain -> soft clip
     const float cutoff = pFilter->load();
     if (cutoff < 19900.0f)
     {
@@ -262,8 +320,8 @@ void VassaGruuvProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
             f.setCutoffFrequency (cutoff);
         for (int i = 0; i < n; ++i)
         {
-            outL[i] = lowpass[0].processSample (0, outL[i]);
-            outR[i] = lowpass[1].processSample (0, outR[i]);
+            mainL[i] = lowpass[0].processSample (0, mainL[i]);
+            mainR[i] = lowpass[1].processSample (0, mainR[i]);
         }
     }
 
@@ -277,34 +335,43 @@ void VassaGruuvProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
         rp.wetLevel = mix * 0.5f;
         rp.dryLevel = 1.0f;
         reverb.setParameters (rp);
-        reverb.processStereo (outL, outR, n);
+        reverb.processStereo (mainL, mainR, n);
     }
 
     masterGain.setTargetValue (pMaster->load());
     for (int i = 0; i < n; ++i)
     {
         const float g = masterGain.getNextValue();
-        outL[i] = std::tanh (outL[i] * g);
-        outR[i] = std::tanh (outR[i] * g);
+        mainL[i] = std::tanh (mainL[i] * g);
+        mainR[i] = std::tanh (mainR[i] * g);
     }
 }
 
-// ---------------------------------------------------------------- UI API
+// ---------------------------------------------------------------- samples
 
-void VassaGruuvProcessor::triggerPadFromUI (int pad, float velocity)
+std::shared_ptr<const Sample> VassaGruuvProcessor::getSample (int track) const
 {
-    const auto scope = uiFifo.write (1);
-    if (scope.blockSize1 > 0)
-    {
-        uiPads[(size_t) scope.startIndex1] = pad;
-        uiVels[(size_t) scope.startIndex1] = velocity;
-    }
+    const juce::SpinLock::ScopedLockType l (sampleLock);
+    return samples[(size_t) track];
 }
 
-bool VassaGruuvProcessor::loadSample (int pad, const juce::File& file)
+void VassaGruuvProcessor::setSample (int track, std::shared_ptr<const Sample> s)
+{
+    trackNames[(size_t) track] = s != nullptr ? s->name : juce::String();
+    {
+        const juce::SpinLock::ScopedLockType l (sampleLock);
+        if (samples[(size_t) track] != nullptr)
+            graveyard.push_back (std::move (samples[(size_t) track]));
+        samples[(size_t) track] = std::move (s);
+    }
+    // Released here (message thread) once no voice references them any more
+    graveyard.erase (std::remove_if (graveyard.begin(), graveyard.end(), [] (const auto& p) { return p.use_count() == 1; }), graveyard.end());
+}
+
+bool VassaGruuvProcessor::loadSample (int track, const juce::File& file)
 {
     std::unique_ptr<juce::AudioFormatReader> reader (formatManager.createReaderFor (file));
-    if (reader == nullptr || reader->lengthInSamples < 2 || reader->lengthInSamples > (juce::int64) (reader->sampleRate * 30.0))
+    if (reader == nullptr || reader->lengthInSamples < 64 || reader->lengthInSamples > (juce::int64) (reader->sampleRate * 60.0))
         return false;
 
     auto s = std::make_shared<Sample>();
@@ -313,24 +380,47 @@ bool VassaGruuvProcessor::loadSample (int pad, const juce::File& file)
     reader->read (&s->data, 0, (int) reader->lengthInSamples, 0, true, channels > 1);
     s->rate = reader->sampleRate;
     s->path = file.getFullPathName();
-
-    const juce::SpinLock::ScopedLockType l (sampleLock);
-    samples[(size_t) pad] = std::move (s);
+    s->name = file.getFileNameWithoutExtension();
+    s->detectOnsets();
+    setSample (track, std::move (s));
     return true;
 }
 
-void VassaGruuvProcessor::clearSample (int pad)
+void VassaGruuvProcessor::resetToFactorySample (int track)
 {
-    const juce::SpinLock::ScopedLockType l (sampleLock);
-    samples[(size_t) pad] = nullptr;
+    setSample (track, makeFactorySample (track));
 }
 
-juce::String VassaGruuvProcessor::getSampleName (int pad) const
+void VassaGruuvProcessor::previewTrack (int track, float velocity)
 {
-    const juce::SpinLock::ScopedLockType l (sampleLock);
-    auto s = samples[(size_t) pad];
-    return s != nullptr ? juce::File (s->path).getFileName() : juce::String();
+    const auto scope = uiFifo.write (1);
+    if (scope.blockSize1 > 0)
+    {
+        Trig e;
+        e.track = track;
+        e.vel = velocity;
+        e.gate = (int) (sr * 0.5);
+        uiTrigs[(size_t) scope.startIndex1] = e;
+    }
 }
+
+juce::Array<juce::File> VassaGruuvProcessor::exportStems (int loops, const juce::File& dir)
+{
+    ExportInput in;
+    in.pattern = &pattern;
+    in.bpm = currentBpm.load();
+    in.swing = apvts.getRawParameterValue ("swing")->load();
+    in.sampleRate = sr;
+    for (int t = 0; t < numTracks; ++t)
+    {
+        in.params[(size_t) t] = readTrackParams (t);
+        in.samples[(size_t) t] = getSample (t);
+        in.names[(size_t) t] = trackNames[(size_t) t];
+    }
+    return vg::exportStems (in, loops, dir, "VassaGruuv");
+}
+
+// ---------------------------------------------------------------- pattern tools
 
 void VassaGruuvProcessor::setParam (const juce::String& id, float plainValue)
 {
@@ -340,7 +430,8 @@ void VassaGruuvProcessor::setParam (const juce::String& id, float plainValue)
 
 void VassaGruuvProcessor::applyGroove (const GeneratedGroove& g)
 {
-    pattern.assign (g.steps);
+    pattern.clearMods();
+    pattern.assignVelocities (g.steps);
     if (g.bpm)   setParam ("tempo", (float) *g.bpm);
     if (g.swing) setParam ("swing", *g.swing);
 }
@@ -354,9 +445,9 @@ void VassaGruuvProcessor::generateLocal (int style, float density)
 
 void VassaGruuvProcessor::mutatePattern (float amount)
 {
-    auto grid = pattern.snapshot();
+    auto grid = pattern.snapshotVelocities();
     PatternGenerator::mutate (grid, amount, rng);
-    pattern.assign (grid);
+    pattern.assignVelocities (grid);
     aiStatus = "Pattern mutated";
 }
 
@@ -374,7 +465,7 @@ bool VassaGruuvProcessor::requestClaude (const juce::String& prompt)
         aiStatus = "Set your Anthropic API key first";
         return false;
     }
-    if (! claude.request (key, prompt, pattern.snapshot(), (double) pTempo->load()))
+    if (! claude.request (key, prompt, pattern.snapshotVelocities(), (double) pTempo->load()))
         return false;
     aiStatus = "Asking Claude...";
     return true;
@@ -419,26 +510,19 @@ void VassaGruuvProcessor::setApiKey (const juce::String& key)
 void VassaGruuvProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
     juce::ValueTree root ("VassaGruuvState");
-    root.setProperty ("version", 1, nullptr);
+    root.setProperty ("version", 2, nullptr);
     root.setProperty ("pattern", pattern.toHex(), nullptr);
     root.appendChild (apvts.copyState(), nullptr);
 
     juce::ValueTree smp ("Samples");
-    for (int i = 0; i < numPads; ++i)
-    {
-        std::shared_ptr<const Sample> s;
-        {
-            const juce::SpinLock::ScopedLockType l (sampleLock);
-            s = samples[(size_t) i];
-        }
-        if (s != nullptr)
+    for (int t = 0; t < numTracks; ++t)
+        if (auto s = getSample (t); s != nullptr && ! s->factory)
         {
             juce::ValueTree c ("Sample");
-            c.setProperty ("pad", i, nullptr);
+            c.setProperty ("track", t, nullptr);
             c.setProperty ("path", s->path, nullptr);
             smp.appendChild (c, nullptr);
         }
-    }
     root.appendChild (smp, nullptr);
 
     if (auto xml = root.createXml())
@@ -461,14 +545,14 @@ void VassaGruuvProcessor::setStateInformation (const void* data, int size)
     if (params.isValid())
         apvts.replaceState (params);
 
-    for (int i = 0; i < numPads; ++i)
-        clearSample (i);
+    for (int t = 0; t < numTracks; ++t)
+        resetToFactorySample (t);
     for (const auto& c : root.getChildWithName ("Samples"))
     {
-        const int pad = c.getProperty ("pad");
+        const int t = c.getProperty ("track");
         const juce::File f (c.getProperty ("path").toString());
-        if (pad >= 0 && pad < numPads && f.existsAsFile())
-            loadSample (pad, f);
+        if (t >= 0 && t < numTracks && f.existsAsFile())
+            loadSample (t, f);
     }
 }
 

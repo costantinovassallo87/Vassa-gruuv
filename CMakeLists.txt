@@ -27,6 +27,7 @@ endif()
 set(VG_SOURCES
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
+    Source/Engine/Exporter.cpp
     Source/AI/PatternGenerator.cpp
     Source/AI/ClaudeClient.cpp)
 
@@ -66,13 +67,24 @@ target_link_libraries(VassaGruuv
 juce_add_console_app(VassaGruuvTests PRODUCT_NAME "VassaGruuvTests")
 target_sources(VassaGruuvTests PRIVATE
     Tests/Tests.cpp
+    Source/Engine/Exporter.cpp
     Source/AI/PatternGenerator.cpp
     Source/AI/ClaudeClient.cpp)
 target_include_directories(VassaGruuvTests PRIVATE Source)
 target_compile_definitions(VassaGruuvTests PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
 target_link_libraries(VassaGruuvTests
-    PRIVATE juce::juce_core juce::juce_events juce::juce_audio_basics
+    PRIVATE juce::juce_core juce::juce_events juce::juce_audio_basics juce::juce_audio_formats
     PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+
+# Headless test of the real processor (sequencer, sampler, routing)
+juce_add_console_app(VassaGruuvProcessorTest PRODUCT_NAME "VassaGruuvProcessorTest")
+target_sources(VassaGruuvProcessorTest PRIVATE Tests/ProcessorTest.cpp)
+target_include_directories(VassaGruuvProcessorTest PRIVATE Source)
+target_compile_definitions(VassaGruuvProcessorTest PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
+target_link_libraries(VassaGruuvProcessorTest
+    PRIVATE VassaGruuv juce::juce_audio_utils juce::juce_audio_formats juce::juce_dsp
+    PUBLIC juce::juce_recommended_config_flags)
 
 enable_testing()
 add_test(NAME unit COMMAND VassaGruuvTests)
+add_test(NAME processor COMMAND VassaGruuvProcessorTest)

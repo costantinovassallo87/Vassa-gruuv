@@ -88,7 +88,7 @@ GeneratedGroove generate (int styleIndex, float density, juce::Random& rng)
 void mutate (PatternGrid& grid, float amount, juce::Random& rng)
 {
     amount = juce::jlimit (0.0f, 1.0f, amount);
-    for (int p = 0; p < numPads; ++p)
+    for (int p = 0; p < numTracks; ++p)
         for (int s = 0; s < numSteps; ++s)
         {
             auto& v = grid[(size_t) p][(size_t) s];

@@ -10,6 +10,7 @@ namespace col
     const juce::Colour panel   { 0xff1f2128 };
     const juce::Colour panelHi { 0xff2b2e38 };
     const juce::Colour accent  { 0xffff7a1a };
+    const juce::Colour accent2 { 0xff3ec1d3 };
     const juce::Colour text    { 0xffe8e8ea };
     const juce::Colour dim     { 0xff8b909c };
 }
@@ -20,67 +21,105 @@ public:
     LookAndFeel();
 };
 
-// 4x4 pad grid, pad 1 at the bottom-left like on Maschine.
-class PadGrid : public juce::Component,
-                public juce::FileDragAndDropTarget
-{
-public:
-    PadGrid (VassaGruuvProcessor& p, std::function<void (int)> onSelect) : proc (p), select (std::move (onSelect)) {}
+constexpr int gridLabelW = 140; // shared by the step and modulation grids so their columns line up
 
-    void paint (juce::Graphics&) override;
-    void mouseDown (const juce::MouseEvent&) override;
-    bool isInterestedInFileDrag (const juce::StringArray&) override { return true; }
-    void filesDropped (const juce::StringArray&, int x, int y) override;
-
-    int selected = 0;
-    std::array<float, vg::numPads> flash {};
-    std::function<void()> onSampleChanged;
-
-private:
-    juce::Rectangle<int> padBounds (int pad) const;
-    int padAt (juce::Point<int>) const;
-
-    VassaGruuvProcessor& proc;
-    std::function<void (int)> select;
-};
-
-// 16 lanes x 16 steps. Click/drag to paint, wheel to change velocity, click a lane name to select the pad.
 class StepGrid : public juce::Component
 {
 public:
-    StepGrid (VassaGruuvProcessor& p, std::function<void (int)> onSelect) : proc (p), select (std::move (onSelect)) {}
+    StepGrid (VassaGruuvProcessor& p, std::function<void (int)> onSelect);
+
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+
+    int selected = 0;
+    int playhead = -1;
+
+private:
+    static constexpr int headerH = 14;
+    bool cellAt (juce::Point<int>, int& track, int& step) const;
+    void toggleParam (int track, int tp);
+
+    VassaGruuvProcessor& proc;
+    std::function<void (int)> select;
+    std::array<std::atomic<float>*, vg::numTracks> mutePtr {}, soloPtr {};
+    int paintValue = 100, lastTrack = -1, lastStep = -1;
+};
+
+// Bar editor for one modulation lane of the selected track.
+class ModGrid : public juce::Component
+{
+public:
+    explicit ModGrid (VassaGruuvProcessor& p) : proc (p) {}
 
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
 
-    int selected = 0;
-    int playhead = -1;
+    int track = 0, lane = vg::Velocity;
 
 private:
-    static constexpr int labelW = 64, headerH = 18;
-    bool cellAt (juce::Point<int>, int& pad, int& step) const;
+    juce::Rectangle<float> barArea() const;
+    int stepAt (int x) const;
+    void setFromMouse (const juce::MouseEvent&);
 
     VassaGruuvProcessor& proc;
-    std::function<void (int)> select;
-    uint8_t paintValue = 100;
-    int lastPad = -1, lastStep = -1;
+};
+
+class WaveformView : public juce::Component,
+                     public juce::FileDragAndDropTarget
+{
+public:
+    explicit WaveformView (VassaGruuvProcessor& p) : proc (p) {}
+
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
+    bool isInterestedInFileDrag (const juce::StringArray&) override { return true; }
+    void filesDropped (const juce::StringArray&, int, int) override;
+
+    int track = 0;
+    std::function<void()> onSampleChanged;
+
+private:
+    int handleAt (int x) const;
+    juce::RangedAudioParameter* param (int tp) const;
+    void rebuildPeaks();
+
+    VassaGruuvProcessor& proc;
+    std::shared_ptr<const vg::Sample> cached;
+    int cachedWidth = -1;
+    std::vector<std::pair<float, float>> peaks;
+    int dragging = -1; // vg::TP being dragged
 };
 
 struct Knob
 {
-    juce::Slider slider { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow };
+    juce::Slider slider { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };
     juce::Label label;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
 
     void init (juce::Component& parent, const juce::String& text);
     void attach (juce::AudioProcessorValueTreeState& apvts, const juce::String& id);
-    void setBounds (juce::Rectangle<int> r);
+    void setBounds (int x, int y, int w, int h);
+    void setVisible (bool v) { slider.setVisible (v); label.setVisible (v); }
+};
+
+class DragHandle : public juce::Component
+{
+public:
+    std::function<void()> onDrag;
+    void paint (juce::Graphics&) override;
+    void mouseDrag (const juce::MouseEvent& e) override { if (e.getDistanceFromDragStart() > 4 && onDrag) onDrag(); }
+    void mouseEnter (const juce::MouseEvent&) override { setMouseCursor (juce::MouseCursor::DraggingHandCursor); }
 };
 } // namespace vgui
 
 class VassaGruuvEditor : public juce::AudioProcessorEditor,
+                         public juce::DragAndDropContainer,
                          private juce::Timer
 {
 public:
@@ -91,42 +130,54 @@ public:
     void resized() override;
 
 private:
+    using APVTS = juce::AudioProcessorValueTreeState;
+
     void timerCallback() override;
-    void selectPad (int pad);
-    void refreshSampleInfo();
+    void selectTrack (int track);
+    void selectLane (int lane);
+    void layoutSamplerControls();
     void chooseSample();
-    void showApiKeyDialog();
-    void askClaude();
+    void startStemDrag();
+    void exportStemsToFolder();
+    void bindCombo (juce::ComboBox&, std::unique_ptr<APVTS::ComboBoxAttachment>&, int tp);
+    void setChoice (int tp, int index);
 
     VassaGruuvProcessor& proc;
     vgui::LookAndFeel laf;
+    int selectedTrack = 0, selectedLane = 0, shownKey = -1;
+    bool dragInProgress = false;
 
-    // Global controls
+    // Top bar
     juce::ToggleButton playButton { "PLAY" };
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> playAttachment;
+    std::unique_ptr<APVTS::ButtonAttachment> playAttachment;
     vgui::Knob tempo, swing, filter, reverb, master;
-
-    // Pads / steps
-    vgui::PadGrid padGrid;
-    vgui::StepGrid stepGrid;
-
-    // Selected pad strip
-    juce::Label padTitle, sampleInfo;
-    vgui::Knob level, pan, tune, decay;
-    juce::ToggleButton muteButton { "Mute" };
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> muteAttachment;
-    juce::TextButton loadButton { "Load sample" }, clearSampleButton { "Clear" };
+    vgui::DragHandle dragHandle;
+    juce::ComboBox loopsBox;
+    juce::TextButton exportButton { "Export..." };
     std::unique_ptr<juce::FileChooser> chooser;
+    juce::File lastExportDir;
 
-    // AI panel
-    juce::Label aiTitle, statusLabel;
-    juce::TextEditor promptBox;
-    juce::TextButton askButton { "Ask Claude" }, keyButton { "API key..." };
+    // Step sequencer
     juce::ComboBox styleBox;
-    juce::Slider densitySlider { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
-    juce::TextButton generateButton { "Generate" }, mutateButton { "Mutate" }, clearButton { "Clear pattern" };
+    juce::TextButton generateButton { "Generate" }, mutateButton { "Mutate" }, clearButton { "Clear" };
+    vgui::StepGrid stepGrid;
+    juce::Label statusLabel;
 
-    int selectedPad = 0;
+    // Modulation sequencer
+    std::array<juce::TextButton, vg::numLanes> laneButtons;
+    vgui::ModGrid modGrid;
+
+    // Sampler
+    juce::Label trackTitle, sampleInfo;
+    std::array<juce::TextButton, 3> modeButtons;
+    juce::TextButton loadButton { "Load" }, factoryButton { "Factory" }, previewButton { "Preview" };
+    juce::ToggleButton loopToggle { "Loop" }, reverseToggle { "Reverse" };
+    std::unique_ptr<APVTS::ButtonAttachment> loopAttachment, reverseAttachment;
+    vgui::WaveformView waveform;
+    vgui::Knob knobs[vg::numTP];
+    juce::ComboBox fTypeBox, lDestBox, sModeBox;
+    std::unique_ptr<APVTS::ComboBoxAttachment> fTypeAtt, lDestAtt, sModeAtt;
+    juce::Rectangle<int> groupRects[6];
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VassaGruuvEditor)
 };

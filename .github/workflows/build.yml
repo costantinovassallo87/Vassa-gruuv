@@ -11,7 +11,7 @@ jobs:
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       - name: Build
-        run: cmake --build build --target VassaGruuv_VST3 VassaGruuvTests -j 4
+        run: cmake --build build --target VassaGruuv_VST3 VassaGruuvTests VassaGruuvProcessorTest -j 4
       - name: Test
         run: ctest --test-dir build --output-on-failure
       - name: Verify arm64

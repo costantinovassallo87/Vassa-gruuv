@@ -2,16 +2,22 @@
 
 Groove box VST3 per Mac Apple Silicon, ispirata a NI Maschine ma semplificata. C++17 / JUCE 8.
 
-## Funzioni (v0.1)
-- **16 pad** (4×4, pad 1 in basso a sinistra) con motore di batteria sintetico integrato (kick, snare, clap, hat con choke, tom, cowbell, crash, shaker, perc) oppure **sample** (drag & drop sul pad, wav/aif/flac/mp3/ogg)
-- Per pad: level, pan, tune, decay, mute
-- **Sequencer 16 step** (1 battuta, 16 lane, velocity per step, swing), sincronizzato al transport del DAW; in standalone / DAW fermo usa il clock interno (PLAY)
-- Input MIDI: note C1–D#2 (36–51) suonano i pad
-- Master: filtro low-pass, reverb, volume
-- Stato (pattern, parametri, sample) salvato nel progetto del DAW
-- **AI Groove**
-  - *Generate / Mutate*: generatore locale istantaneo (House, Techno, Hip-Hop, Trap, D&B, Funk), senza rete
-  - *Ask Claude*: descrivi un beat a parole ("techno cupa 128 bpm con hat in levare") e Claude restituisce pattern, BPM e swing via API Anthropic. Può anche modificare il pattern corrente ("più ghost note sulla snare"). Chiave API in `API key...` (salvata in `~/Library/Application Support/VassaGruuv`) oppure variabile `ANTHROPIC_API_KEY`
+## Layout (dall'alto al basso)
+1. **Step sequencer** – 16 tracce × 16 step, velocity per step, mute/solo per traccia, swing. Cliccare una traccia la seleziona.
+2. **Modulation** – lane per step della traccia selezionata: *Velocity, Length, Pitch, Repeat (ratchet 1–8), Nudge (−/+ 50% di step), Chance, Slice*. Trascina per disegnare le barre, doppio click / Alt = reset, rotella = fine. Gli step con modulazioni mostrano un puntino azzurro.
+3. **Sampler** (stile Ableton Simpler) – segue la traccia selezionata:
+   - modi **Classic** (ADSR + loop con crossfade), **One-Shot**, **Slice** (divisioni uguali o rilevamento transienti con sensibilità)
+   - waveform con marker trascinabili (start/end/loop), fade in/out, reverse, drag & drop di file audio
+   - transpose, detune, gain, pan; ampiezza ADSR; filtro LP/HP/BP con envelope; LFO (pitch/filter/volume/pan)
+   - ogni traccia parte con un suono di fabbrica sintetizzato (pulsante *Factory* per ripristinarlo)
+
+## Routing / export
+- **16 uscite stereo separate** (*Track 1…16*) + *Main Mix*. In un host VST3 abilita le uscite che vuoi: una traccia con la propria uscita attiva non finisce più nel Main Mix. Filtro/reverb/master agiscono solo sul Main Mix.
+- **Drag & drop multitraccia**: trascina il badge *DRAG STEMS TO DAW* su una traccia del DAW → un WAV 24-bit stereo per ogni traccia con step (1/2/4/8 battute, coda del reverb ripiegata all'inizio per loop senza buchi). *Export…* scrive gli stessi file in una cartella.
+- Input MIDI: note C1–D#2 (36–51) suonano le tracce.
+
+## Pattern tools / AI (backend già presente, UI da integrare)
+*Generate / Mutate* (generatore locale per stile) e client Claude (`requestClaude`, chiave API da `ANTHROPIC_API_KEY` o impostazioni utente) sono in `Source/AI` e `PluginProcessor`; nella UI restano solo Generate/Mutate/Clear.
 
 ## Build (macOS, Apple Silicon)
 ```sh
@@ -19,15 +25,10 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DVG_COPY_PLUGIN=ON
 cmake --build build --target VassaGruuv_VST3 -j
 ```
 `VG_COPY_PLUGIN=ON` copia il plugin in `~/Library/Audio/Plug-Ins/VST3`. JUCE viene scaricato automaticamente (o `-DVG_JUCE_DIR=<path>`).
-Test logica motore/AI: `cmake --build build --target VassaGruuvTests && ctest --test-dir build`.
-
-La CI (`.github/workflows/build.yml`) compila su macOS arm64, esegue i test e pubblica il `.vst3` come artifact.
+Test: `cmake --build build --target VassaGruuvTests VassaGruuvProcessorTest && ctest --test-dir build`.
+La CI (`.github/workflows/build.yml`) compila su macOS arm64, lancia i test e pubblica il `.vst3`.
 
 ## Struttura
-- `Source/Engine` – pattern condiviso (lock-free) e voci di batteria
+- `Source/Engine` – `Pattern` (lane per step, lock-free), `Scheduler` (step → trigger con repeat/nudge/chance/swing), `Sampler` (voci Simpler-style), `Exporter` (stems offline), `Drums`/`Factory` (suoni di fabbrica)
 - `Source/AI` – generatore locale e client Claude
-- `Source/PluginProcessor.*` – sequencer, mixer, parametri, stato
-- `Source/PluginEditor.*` – UI
-
-## Roadmap
-Più pattern/scene e song mode · uscite separate per pad · lunghezza pattern e step probability · editor sample (trim/slice) · AI on-device (nessuna API) · Keychain per la chiave · firma/notarizzazione per la distribuzione.
+- `Source/PluginProcessor.*` – parametri, routing, stato · `Source/PluginEditor.*` – UI

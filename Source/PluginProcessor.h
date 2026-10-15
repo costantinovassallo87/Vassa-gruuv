@@ -2,7 +2,10 @@
 
 #include "AI/ClaudeClient.h"
 #include "AI/PatternGenerator.h"
-#include "Engine/Drums.h"
+#include "Engine/Exporter.h"
+#include "Engine/Factory.h"
+#include "Engine/Sampler.h"
+#include "Engine/Scheduler.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
@@ -35,56 +38,59 @@ public:
     void getStateInformation (juce::MemoryBlock&) override;
     void setStateInformation (const void*, int) override;
 
-    // Parameter ids
-    static juce::String padId (int pad, const char* what) { return "p" + juce::String (pad) + "_" + what; }
-
     // --- Message-thread API used by the editor ---
-    void triggerPadFromUI (int pad, float velocity);
-    bool loadSample (int pad, const juce::File& file);
-    void clearSample (int pad);
-    juce::String getSampleName (int pad) const;
+    vg::TrackParams readTrackParams (int track) const;
+    std::shared_ptr<const vg::Sample> getSample (int track) const;
+    juce::String getTrackName (int track) const { return trackNames[(size_t) track]; }
+    bool loadSample (int track, const juce::File& file);
+    void resetToFactorySample (int track);
+    float getPlayhead (int track) const { return samplers[(size_t) track].playhead.load (std::memory_order_relaxed); }
 
+    void previewTrack (int track, float velocity = 1.0f);
+
+    // Offline render of the current pattern to one WAV per track (multitrack stems).
+    juce::Array<juce::File> exportStems (int loops, const juce::File& dir);
+
+    // Pattern tools (the AI hooks live here)
     void generateLocal (int style, float density);
     void mutatePattern (float amount);
     void clearPattern();
     bool requestClaude (const juce::String& prompt);
     bool isClaudeBusy() const { return claude.isBusy(); }
-
     juce::String getApiKey() const;
     void setApiKey (const juce::String&);
 
     juce::AudioProcessorValueTreeState apvts;
     vg::Pattern pattern;
     std::atomic<int> currentStep { -1 };
-    std::array<std::atomic<float>, vg::numPads> padFlash;
+    std::atomic<double> currentBpm { 120.0 };
     juce::String aiStatus; // message thread only
 
 private:
-    struct Event { int pos; int pad; float vel; };
-
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
+    static BusesProperties makeBuses();
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void applyGroove (const vg::GeneratedGroove&);
     void setParam (const juce::String& id, float plainValue);
-    void startVoice (int pad, float vel);
+    void startTrig (const vg::Trig&, bool anySolo);
+    void setSample (int track, std::shared_ptr<const vg::Sample>);
 
-    std::array<vg::DrumVoice, vg::numPads> voices;
-    std::array<float, vg::numPads> gainL {}, gainR {};
-
-    std::array<std::shared_ptr<const vg::Sample>, vg::numPads> samples;
+    std::array<vg::TrackSampler, vg::numTracks> samplers;
+    std::array<std::shared_ptr<const vg::Sample>, vg::numTracks> samples;
+    std::vector<std::shared_ptr<const vg::Sample>> graveyard; // keeps replaced samples alive until the audio thread let go
+    std::array<juce::String, vg::numTracks> trackNames; // message thread only
     mutable juce::SpinLock sampleLock;
     juce::AudioFormatManager formatManager;
 
     // UI -> audio trigger queue
     static constexpr int uiQueueSize = 64;
     juce::AbstractFifo uiFifo { uiQueueSize };
-    std::array<int, uiQueueSize> uiPads {};
-    std::array<float, uiQueueSize> uiVels {};
+    std::array<vg::Trig, uiQueueSize> uiTrigs;
 
-    std::array<Event, 1024> events;
+    std::array<vg::Trig, 2048> events;
+    std::array<vg::Trig, 1024> scratchTrigs;
 
-    // Cached parameter pointers
-    std::array<std::atomic<float>*, vg::numPads> pLevel {}, pPan {}, pTune {}, pDecay {}, pMute {};
+    std::array<std::array<std::atomic<float>*, vg::numTP>, vg::numTracks> tpPtr {};
     std::atomic<float>* pMaster = nullptr;
     std::atomic<float>* pTempo = nullptr;
     std::atomic<float>* pSwing = nullptr;
@@ -94,6 +100,8 @@ private:
 
     double sr = 44100.0;
     double internalPpq = 0.0;
+    int scratchCap = 1024;
+    juce::AudioBuffer<float> scratch;
     std::array<juce::dsp::StateVariableTPTFilter<float>, 2> lowpass;
     juce::Reverb reverb;
     juce::SmoothedValue<float> masterGain;
