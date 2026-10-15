@@ -10,7 +10,10 @@ enum TP
 {
     TPMode, TPStart, TPEnd, TPLoop, TPLoopStart, TPLoopEnd, TPLoopFade, TPFadeIn, TPFadeOut, TPReverse,
     TPGain, TPPan, TPTranspose, TPDetune,
+    TPAmpA, TPAmpD, TPAmpS, TPAmpR,
+    TPPitchA, TPPitchD, TPPitchS, TPPitchR, TPPitchAmt,
     TPFType, TPFCut, TPFRes,
+    TPFltA, TPFltD, TPFltS, TPFltR, TPFltAmt,
     TPLDest, TPLRate, TPLAmt,
     TPSMode, TPSCount, TPSSens,
     TPMute, TPSolo,
@@ -48,9 +51,23 @@ inline const TPSpec& tpSpec (int i)
         { "pan",       "Pan",         TPType::Float, -1, 1, 0, 1, "", "" },
         { "transpose", "Transpose",   TPType::Int,   -48, 48, 0, 1, " st", "" },
         { "detune",    "Detune",      TPType::Float, -50, 50, 0, 1, " ct", "" },
+        { "ampA",      "Attack",      TPType::Float, 0, 2000, 0, 0.35f, " ms", "" },
+        { "ampD",      "Decay",       TPType::Float, 1, 5000, 400, 0.35f, " ms", "" },
+        { "ampS",      "Sustain",     TPType::Float, 0, 1, 1, 1, "", "" },
+        { "ampR",      "Release",     TPType::Float, 1, 5000, 50, 0.35f, " ms", "" },
+        { "pitchA",    "Pitch Attack",  TPType::Float, 0, 2000, 0, 0.35f, " ms", "" },
+        { "pitchD",    "Pitch Decay",   TPType::Float, 1, 5000, 120, 0.35f, " ms", "" },
+        { "pitchS",    "Pitch Sustain", TPType::Float, 0, 1, 0, 1, "", "" },
+        { "pitchR",    "Pitch Release", TPType::Float, 1, 5000, 100, 0.35f, " ms", "" },
+        { "pitchAmt",  "Pitch Amount",  TPType::Float, -48, 48, 0, 1, " st", "" },
         { "fType",     "Filter",      TPType::Choice, 0, 3, 0, 1, "", "Off|LP|HP|BP" },
         { "fCut",      "Cutoff",      TPType::Float, 20, 20000, 20000, 0.25f, " Hz", "" },
         { "fRes",      "Resonance",   TPType::Float, 0, 1, 0.1f, 1, "", "" },
+        { "fltA",      "Filter Attack",  TPType::Float, 0, 2000, 0, 0.35f, " ms", "" },
+        { "fltD",      "Filter Decay",   TPType::Float, 1, 5000, 300, 0.35f, " ms", "" },
+        { "fltS",      "Filter Sustain", TPType::Float, 0, 1, 0, 1, "", "" },
+        { "fltR",      "Filter Release", TPType::Float, 1, 5000, 100, 0.35f, " ms", "" },
+        { "fltAmt",    "Filter Amount",  TPType::Float, -48, 48, 0, 1, " st", "" },
         { "lDest",     "LFO Dest",    TPType::Choice, 0, 4, 0, 1, "", "Off|Pitch|Filter|Volume|Pan" },
         { "lRate",     "LFO Rate",    TPType::Float, 0.05f, 20, 4, 0.4f, " Hz", "" },
         { "lAmt",      "LFO Amount",  TPType::Float, 0, 1, 0, 1, "", "" },
@@ -76,18 +93,22 @@ inline juce::String formatTP (const TPSpec& sp, float v)
     return juce::String (v, sp.type == TPType::Int ? 0 : 2);
 }
 
+// ADSR parameter ids of an envelope: which = 0..3 for A, D, S, R; 4 for the amount (pitch / filter only)
+inline int envParam (int kind, int which)
+{
+    static const int t[numEnvKinds][5] = { { TPAmpA, TPAmpD, TPAmpS, TPAmpR, -1 },
+                                           { TPPitchA, TPPitchD, TPPitchS, TPPitchR, TPPitchAmt },
+                                           { TPFltA, TPFltD, TPFltS, TPFltR, TPFltAmt } };
+    return t[juce::jlimit (0, (int) numEnvKinds - 1, kind)][juce::jlimit (0, 4, which)];
+}
+
 inline juce::String trackParamId (int track, int tp) { return "t" + juce::String (track) + "_" + tpSpec (tp).id; }
 
 struct TrackParams
 {
     float v[numTP];
-    EnvShape env[numEnvKinds];
 
-    TrackParams()
-    {
-        for (int i = 0; i < numTP; ++i) v[i] = tpSpec (i).def;
-        for (int k = 0; k < numEnvKinds; ++k) env[k] = defaultEnv (k);
-    }
+    TrackParams() { for (int i = 0; i < numTP; ++i) v[i] = tpSpec (i).def; }
 
     float operator[] (int i) const noexcept { return v[i]; }
     bool on (int i) const noexcept { return v[i] > 0.5f; }

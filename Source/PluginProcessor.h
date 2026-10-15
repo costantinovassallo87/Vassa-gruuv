@@ -39,9 +39,7 @@ public:
     void setStateInformation (const void*, int) override;
 
     // --- Message-thread API used by the editor ---
-    vg::TrackParams readTrackParams (int track, bool fromAudioThread = false) const;
-    vg::EnvShape getEnv (int track, int kind) const;
-    void setEnv (int track, int kind, const vg::EnvShape&);
+    vg::TrackParams readTrackParams (int track) const;
     std::shared_ptr<const vg::Sample> getSample (int track) const;
     juce::String getTrackName (int track) const { return trackNames[(size_t) track]; }
     bool loadSample (int track, const juce::File& file);
@@ -83,12 +81,6 @@ private:
     std::array<juce::String, vg::numTracks> trackNames; // message thread only
     mutable juce::SpinLock sampleLock;
 
-    // Envelopes: edited on the message thread, snapshotted for the audio thread once per block
-    using TrackEnvs = std::array<vg::EnvShape, vg::numEnvKinds>;
-    mutable juce::SpinLock envLock;
-    std::array<TrackEnvs, vg::numTracks> envs, envsAudio;
-    std::atomic<int> envVersion { 0 };
-    int envVersionAudio = 0;
     juce::AudioFormatManager formatManager;
 
     // UI -> audio trigger queue

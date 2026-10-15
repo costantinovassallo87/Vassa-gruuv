@@ -155,13 +155,10 @@ public:
         fadeInLen = juce::jmax (32.0, (double) p[TPFadeIn] * 0.001 * sr);
         fadeOutLen = juce::jmax (32.0, (double) p[TPFadeOut] * 0.001 * sr);
 
-        const bool oneShot = mode != ModeClassic; // one-shot / slice never release: they hold the sustain point until the sample ends
-        ampEnv.start (p.env[EnvAmp], sr);
-        pitchEnv.start (p.env[EnvPitch], sr);
-        fltEnv.start (p.env[EnvFilter], sr);
-        released = false;
-        releaseFade = 1.0f;
-        releaseMul = std::exp (-4.0f / (0.02f * (float) sr));
+        const bool oneShot = mode != ModeClassic; // one-shot / slice are never released: they hold the sustain level until the sample ends
+        ampEnv.start (p[TPAmpA], p[TPAmpD], p[TPAmpS], p[TPAmpR], sr);
+        pitchEnv.start (p[TPPitchA], p[TPPitchD], p[TPPitchS], p[TPPitchR], sr);
+        fltEnv.start (p[TPFltA], p[TPFltD], p[TPFltS], p[TPFltR], sr);
 
         gated = ! oneShot && gateSamples >= 0;
         gateLeft = gated ? juce::jmax (1, gateSamples) : 0;
@@ -175,7 +172,6 @@ public:
 
     void release()
     {
-        released = true;
         ampEnv.release();
         pitchEnv.release();
         fltEnv.release();
@@ -236,18 +232,13 @@ public:
                 sr = sr * wa + read (c1, p2) * wb;
             }
 
-            float a = ampEnv.tick();
+            const float a = ampEnv.tick();
             pitchEnv.tick();
             fltEnv.tick();
-            if (released && ampEnv.finished) // envelope ended on a non-zero level: fade out quickly
+            if (ampEnv.st == Adsr::Idle)
             {
-                releaseFade *= releaseMul;
-                a *= releaseFade;
-                if (a < 1.0e-4f)
-                {
-                    active = false;
-                    break;
-                }
+                active = false;
+                break;
             }
             float g = a * gain * lfoVol;
 
@@ -279,12 +270,12 @@ private:
             lfoPhase -= juce::MathConstants<float>::twoPi;
         const float lfo = dest > 0 ? std::sin (lfoPhase) * amt : 0.0f;
 
-        const float semis = prm[TPTranspose] + pitch + pitchEnv.level + prm[TPDetune] / 100.0f + (dest == 1 ? lfo * 12.0f : 0.0f);
+        const float semis = prm[TPTranspose] + pitch + pitchEnv.level * prm[TPPitchAmt] + prm[TPDetune] / 100.0f + (dest == 1 ? lfo * 12.0f : 0.0f);
         rate = baseRate * std::exp2 ((double) semis / 12.0);
 
         if (prm.idx (TPFType) > 0)
         {
-            const float st = fltEnv.level + (dest == 2 ? lfo * 36.0f : 0.0f);
+            const float st = fltEnv.level * prm[TPFltAmt] + (dest == 2 ? lfo * 36.0f : 0.0f);
             svf.set (prm[TPFCut] * std::exp2 (st / 12.0f), prm[TPFRes], sampleRate);
         }
 
@@ -297,14 +288,13 @@ private:
 
     std::shared_ptr<const Sample> smp;
     TrackParams prm;
-    LineEnv ampEnv, pitchEnv, fltEnv;
+    Adsr ampEnv, pitchEnv, fltEnv;
     Svf svf;
     double sampleRate = 44100.0, pos = 0, rs = 0, re = 0, pls = 0, ple = 0, loopLen = 0, xfade = 0;
     double baseRate = 1, rate = 1, fadeInLen = 32, fadeOutLen = 32;
-    float releaseFade = 1, releaseMul = 0.9f;
     float gain = 1, pitch = 0, lfoPhase = 0, lfoVol = 1, panL = 1, panR = 1;
     int mode = 0, gateLeft = 0;
-    bool reverse = false, loop = false, gated = false, released = false;
+    bool reverse = false, loop = false, gated = false;
 };
 
 // Small polyphonic pool for one track.

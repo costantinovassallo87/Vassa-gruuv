@@ -102,7 +102,7 @@ public:
     bool isInterestedInFileDrag (const juce::StringArray&) override { return true; }
     void filesDropped (const juce::StringArray&, int, int) override;
 
-    int track = 0;
+    int track = 0, envKind = vg::EnvAmp; // which ADSR is drawn / edited on top of the waveform
     std::function<void()> onSampleChanged;
 
 private:
@@ -113,6 +113,9 @@ private:
     int handleAt (int x) const;
     juce::RangedAudioParameter* param (int tp) const;
     void rebuildPeaks();
+    float gateMs() const;
+    int envNodeAt (juce::Point<float>, const vg::TrackParams&) const;
+    void setPlain (int tp, float plain);
     void drawFlag (juce::Graphics&, float x, juce::Colour, bool left, bool highlighted, const juce::String& label) const;
 
     VassaGruuvProcessor& proc;
@@ -120,45 +123,8 @@ private:
     int cachedWidth = -1;
     double cachedStart = -1.0, cachedEnd = -1.0, viewStart = 0.0, viewEnd = 1.0;
     std::vector<std::pair<float, float>> peaks;
-    int dragging = -1, hover = -1; // vg::TP of the marker
-};
-
-// Breakpoint editor for one envelope (amp / pitch / filter) of the selected track.
-// Drag points, double-click to add, right-click a point for sustain / delete, wheel = zoom time.
-class EnvelopeView : public juce::Component
-{
-public:
-    explicit EnvelopeView (VassaGruuvProcessor& p) : proc (p) {}
-
-    void paint (juce::Graphics&) override;
-    void mouseMove (const juce::MouseEvent&) override;
-    void mouseDown (const juce::MouseEvent&) override;
-    void mouseDrag (const juce::MouseEvent&) override;
-    void mouseUp (const juce::MouseEvent&) override;
-    void mouseDoubleClick (const juce::MouseEvent&) override;
-    void mouseExit (const juce::MouseEvent&) override { hover = -1; repaint(); }
-    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
-
-    void resetShape();
-
-    int track = 0, kind = vg::EnvAmp;
-
-private:
-    juce::Rectangle<float> plot() const { return { 34.0f, 8.0f, (float) getWidth() - 42.0f, (float) getHeight() - 26.0f }; }
-    float tx (float ms) const { return plot().getX() + ms / spanMs * plot().getWidth(); }
-    float ty (float level) const;
-    float msAt (float x) const { return (x - plot().getX()) / plot().getWidth() * spanMs; }
-    float levelAt (float y) const;
-    int pointAt (juce::Point<float>) const;
-    void commit();
-    void addPoint (juce::Point<float>);
-    void removePoint (int index);
-    juce::Colour colour() const;
-
-    VassaGruuvProcessor& proc;
-    vg::EnvShape edit;
-    float spanMs = 500.0f;
-    int hover = -1, dragging = -1, lastTrack = -1, lastKind = -1;
+    int dragging = -1, hover = -1;           // vg::TP of the start/end/loop marker
+    int envDragging = -1, envHover = -1;     // 0 = attack, 1 = decay/sustain, 2 = release node
 };
 
 struct Knob
@@ -203,6 +169,7 @@ private:
     void selectTrack (int track);
     void selectLane (int lane);
     void layoutSamplerControls();
+    void layoutEnvKnobs();
     void chooseSample();
     void startStemDrag();
     void exportStemsToFolder();
@@ -243,8 +210,7 @@ private:
     vgui::WaveformView waveform;
     vgui::Knob knobs[vg::numTP];
     std::array<juce::TextButton, vg::numEnvKinds> envTabs;
-    juce::TextButton envReset { "Reset" };
-    vgui::EnvelopeView envView;
+    int envKindSel = vg::EnvAmp;
     juce::ComboBox fTypeBox, lDestBox, sModeBox;
     std::unique_ptr<APVTS::ComboBoxAttachment> fTypeAtt, lDestAtt, sModeAtt;
     juce::Rectangle<int> groupRects[7];

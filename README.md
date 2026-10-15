@@ -9,7 +9,7 @@ Groove box VST3 per Mac Apple Silicon, ispirata a NI Maschine ma semplificata. C
    - modi **Classic** (ADSR + loop con crossfade), **One-Shot**, **Slice** (divisioni uguali o rilevamento transienti con sensibilità)
    - waveform con marker trascinabili (start/end/loop), fade in/out, reverse, drag & drop di file audio
    - transpose, detune, gain, pan; filtro LP/HP/BP; LFO (pitch/filter/volume/pan)
-   - **inviluppi a linea** (stile Cubase Sampler Track) per Amp, Pitch e Filter, con selettore per mostrarne uno alla volta: fino a 8 punti trascinabili, doppio click = aggiungi, click destro = punto di sustain / elimina, rotella = zoom temporale. Il sustain tiene l'inviluppo finché la nota è tenuta; al rilascio prosegue sui punti successivi (in One-Shot/Slice resta sul sustain fino a fine sample)
+   - **inviluppi ADSR** per Amp, Pitch e Filter (Pitch e Filter con un *Amount* in semitoni), con selettore per vederne uno alla volta. L'ADSR si modifica **direttamente sulla waveform** trascinando i nodi (A, D/S, R; il rilascio parte a fine step) e con i knob a lato; tutti i valori sono parametri del plugin, quindi **automatizzabili dal DAW**. La waveform è *adattiva*: mostra in tempo reale ciò che si sente (campione × inviluppo × fade), con la forma originale come fantasma. In One-Shot/Slice il rilascio non si usa: l'inviluppo tiene il livello di sustain fino a fine sample
    - waveform con zoom (rotella; Shift+rotella = scorri; doppio click = reset), righello temporale, marker S/E/L con lettura in ms durante il drag
    - ogni traccia parte con un suono di fabbrica sintetizzato (pulsante *Factory* per ripristinarlo)
 

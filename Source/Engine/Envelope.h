@@ -6,158 +6,90 @@
 
 namespace vg
 {
-// Breakpoint ("line") envelopes, Cubase-sampler style. Each track has one per kind.
+// Every track has three ADSR envelopes: amplitude, pitch and filter (the last two scaled by an amount in semitones).
 enum EnvKind { EnvAmp = 0, EnvPitch, EnvFilter, numEnvKinds };
 
-constexpr int maxEnvPoints = 8;
-
-struct EnvInfo
+inline const char* envName (int kind)
 {
-    const char* name;
-    float min, max; // level range
-    const char* unit;
-    bool bipolar;
-};
-
-inline const EnvInfo& envInfo (int kind)
-{
-    static const EnvInfo t[numEnvKinds] = {
-        { "Amp",    0.0f,   1.0f,  "",    false },
-        { "Pitch",  -24.0f, 24.0f, " st", true  },
-        { "Filter", -48.0f, 48.0f, " st", true  },
-    };
-    return t[juce::jlimit (0, (int) numEnvKinds - 1, kind)];
+    static const char* n[numEnvKinds] = { "Amp", "Pitch", "Filter" };
+    return n[juce::jlimit (0, (int) numEnvKinds - 1, kind)];
 }
 
-struct EnvPoint
+// Level (0..1) of a linear ADSR at time tMs. releaseAtMs < 0 means the note is never released (held / one-shot).
+// This is the reference shape: the voice generator below and the waveform display both follow it.
+inline float adsrLevel (float tMs, float a, float d, float s, float r, float releaseAtMs)
 {
-    float timeMs = 0.0f;
-    float level = 0.0f;
-};
-
-// Points are sorted by time; the first point is always at 0 ms.
-// While a note is held the envelope stops at the sustain point; on release it plays on through the remaining points.
-struct EnvShape
-{
-    int n = 1;
-    int sustain = 0;
-    EnvPoint p[maxEnvPoints];
-
-    // Keeps the shape well-formed after any edit.
-    void sanitize (int kind)
+    auto held = [&] (float t)
     {
-        const auto& info = envInfo (kind);
-        n = juce::jlimit (1, maxEnvPoints, n);
-        sustain = juce::jlimit (0, n - 1, sustain);
-        p[0].timeMs = 0.0f;
-        for (int i = 0; i < n; ++i)
-        {
-            p[i].level = juce::jlimit (info.min, info.max, p[i].level);
-            if (i > 0)
-                p[i].timeMs = juce::jmax (p[i].timeMs, p[i - 1].timeMs + 1.0f);
-        }
-    }
-
-    juce::String toString() const
-    {
-        juce::String s (n);
-        s << "," << sustain;
-        for (int i = 0; i < n; ++i)
-            s << ";" << p[i].timeMs << ":" << p[i].level;
+        if (t < a)
+            return t / a;
+        if (t < a + d)
+            return 1.0f + (s - 1.0f) * (t - a) / d;
         return s;
-    }
+    };
 
-    static EnvShape fromString (const juce::String& text, int kind)
-    {
-        auto parts = juce::StringArray::fromTokens (text, ";", "");
-        auto head = juce::StringArray::fromTokens (parts[0], ",", "");
-        EnvShape e;
-        e.n = juce::jlimit (1, maxEnvPoints, juce::jmin (head[0].getIntValue(), parts.size() - 1));
-        e.sustain = head[1].getIntValue();
-        for (int i = 0; i < e.n; ++i)
-        {
-            auto tl = juce::StringArray::fromTokens (parts[i + 1], ":", "");
-            e.p[i] = { tl[0].getFloatValue(), tl[1].getFloatValue() };
-        }
-        e.sanitize (kind);
-        return e;
-    }
-};
+    if (releaseAtMs < 0.0f || tMs < releaseAtMs)
+        return held (tMs);
 
-inline EnvShape defaultEnv (int kind)
-{
-    EnvShape e;
-    if (kind == EnvAmp)
-    {
-        e.n = 2;
-        e.p[0] = { 0.0f, 1.0f };
-        e.p[1] = { 50.0f, 0.0f }; // release tail
-    }
-    return e;
+    const float f = (tMs - releaseAtMs) / juce::jmax (r, 1.0f);
+    return f >= 1.0f ? 0.0f : held (releaseAtMs) * (1.0f - f);
 }
 
-// Runtime envelope generator.
-class LineEnv
+// Runtime generator, linear segments.
+class Adsr
 {
 public:
+    enum State { Idle, Att, Dec, Sus, Rel };
+    State st = Idle;
     float level = 0.0f;
-    bool finished = true; // reached its last point (or has a single point)
 
-    void start (const EnvShape& s, double sampleRate)
+    void start (float aMs, float dMs, float s, float rMs, double sr)
     {
-        shape = s;
-        sr = sampleRate;
-        seg = 0;
-        segPos = 0.0;
-        released = false;
-        level = startLevel = shape.p[0].level;
-        finished = shape.n <= 1;
+        sus = s;
+        aInc = aMs <= 0.5f ? 1.0f : 1.0f / (aMs * 0.001f * (float) sr);
+        dDec = (1.0f - s) / (juce::jmax (dMs, 1.0f) * 0.001f * (float) sr);
+        rLen = juce::jmax (rMs, 1.0f) * 0.001f * (float) sr;
+        if (aMs <= 0.5f)
+        {
+            level = 1.0f;
+            st = Dec;
+        }
+        else
+        {
+            level = 0.0f;
+            st = Att;
+        }
     }
 
     void release()
     {
-        if (released)
+        if (st == Idle || st == Rel)
             return;
-        released = true;
-        if (seg < shape.sustain)
-        {
-            seg = shape.sustain;
-            segPos = 0.0;
-            startLevel = level;
-        }
+        st = Rel;
+        rDec = level / rLen;
     }
 
     float tick()
     {
-        if (seg >= shape.n - 1)
+        switch (st)
         {
-            finished = true;
-            return level;
-        }
-        if (seg == shape.sustain && ! released)
-        {
-            level = shape.p[seg].level;
-            return level;
-        }
-
-        const double dur = juce::jmax (1.0, (double) (shape.p[seg + 1].timeMs - shape.p[seg].timeMs) * 0.001 * sr);
-        segPos += 1.0;
-        const float f = (float) juce::jmin (1.0, segPos / dur);
-        level = startLevel + (shape.p[seg + 1].level - startLevel) * f;
-        if (segPos >= dur)
-        {
-            ++seg;
-            segPos = 0.0;
-            startLevel = level = shape.p[seg].level;
+            case Att: level += aInc; if (level >= 1.0f) { level = 1.0f; st = Dec; } break;
+            case Dec:
+                level -= dDec;
+                if (level <= sus)
+                {
+                    level = sus;
+                    st = sus <= 1.0e-4f ? Idle : Sus;
+                }
+                break;
+            case Rel: level -= rDec; if (level <= 0.0f) { level = 0.0f; st = Idle; } break;
+            case Idle:
+            case Sus: break;
         }
         return level;
     }
 
 private:
-    EnvShape shape;
-    double sr = 44100.0, segPos = 0.0;
-    float startLevel = 0.0f;
-    int seg = 0;
-    bool released = false;
+    float sus = 1.0f, aInc = 1.0f, dDec = 0.0f, rDec = 0.0f, rLen = 1.0f;
 };
 } // namespace vg
