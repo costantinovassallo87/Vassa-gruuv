@@ -9,7 +9,11 @@ Groove box VST3 per Mac Apple Silicon, ispirata a NI Maschine ma semplificata. C
    - modi **Classic** (ADSR + loop con crossfade), **One-Shot**, **Slice** (divisioni uguali o rilevamento transienti con sensibilità)
    - waveform con marker trascinabili (start/end/loop), fade in/out, reverse, drag & drop di file audio
    - transpose, detune, gain, pan; ampiezza ADSR; filtro LP/HP/BP con envelope; LFO (pitch/filter/volume/pan)
+   - waveform con zoom (rotella; Shift+rotella = scorri; doppio click = reset), righello temporale, marker S/E/L con lettura in ms durante il drag
    - ogni traccia parte con un suono di fabbrica sintetizzato (pulsante *Factory* per ripristinarlo)
+
+## GUI
+Tema scuro stile hardware, colore per famiglia di tracce, knob con arco (bipolare dove serve) e valore sempre visibile, codice colore per sezione (output/amp arancio, filtro ciano, LFO viola). La finestra è ridimensionabile (proporzioni fisse, 75–150%).
 
 ## Routing / export
 - **16 uscite stereo separate** (*Track 1…16*) + *Main Mix*. In un host VST3 abilita le uscite che vuoi: una traccia con la propria uscita attiva non finisce più nel Main Mix. Filtro/reverb/master agiscono solo sul Main Mix.

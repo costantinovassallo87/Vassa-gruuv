@@ -37,11 +37,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout VassaGruuvProcessor::createL
                 case TPType::Float:
                     layout.add (std::make_unique<juce::AudioParameterFloat> (
                         id, name, juce::NormalisableRange<float> (sp.min, sp.max, 0.0f, sp.skew), sp.def,
-                        juce::AudioParameterFloatAttributes().withLabel (sp.unit)));
+                        juce::AudioParameterFloatAttributes().withStringFromValueFunction ([i] (float v, int) { return formatTP (tpSpec (i), v); })));
                     break;
                 case TPType::Int:
                     layout.add (std::make_unique<juce::AudioParameterInt> (id, name, (int) sp.min, (int) sp.max, (int) sp.def,
-                                                                           juce::AudioParameterIntAttributes().withLabel (sp.unit)));
+                                                                           juce::AudioParameterIntAttributes().withStringFromValueFunction ([i] (int v, int) { return formatTP (tpSpec (i), (float) v); })));
                     break;
                 case TPType::Bool:
                     layout.add (std::make_unique<juce::AudioParameterBool> (id, name, sp.def > 0.5f));

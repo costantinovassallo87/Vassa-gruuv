@@ -72,6 +72,19 @@ inline const TPSpec& tpSpec (int i)
     return t[juce::jlimit (0, (int) numTP - 1, i)];
 }
 
+// Display string for a parameter value (used by the host and by the knob text boxes)
+inline juce::String formatTP (const TPSpec& sp, float v)
+{
+    const juce::String unit (sp.unit);
+    if (juce::String (sp.id) == "pan")
+        return std::abs (v) < 0.005f ? juce::String ("C") : (v < 0 ? "L " : "R ") + juce::String (juce::roundToInt (std::abs (v) * 100.0f));
+    if (unit == " ms" || unit == " Hz")
+        return (v < 100.0f && sp.max < 100.0f ? juce::String (v, 1) : (v < 10.0f ? juce::String (v, 1) : juce::String (juce::roundToInt (v)))) + unit;
+    if (unit.isNotEmpty())
+        return juce::String (v, sp.type == TPType::Int ? 0 : 1) + unit;
+    return juce::String (v, sp.type == TPType::Int ? 0 : 2);
+}
+
 inline juce::String trackParamId (int track, int tp) { return "t" + juce::String (track) + "_" + tpSpec (tp).id; }
 
 struct TrackParams
